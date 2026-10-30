@@ -1,0 +1,22 @@
+# Semtech-copyrighted material: never commit
+dump/
+disasm/
+datasheet/
+*.o
+
+# New recordings may contain other people's mesh traffic; only the test vectors are tracked
+captures/*
+!captures/iter/
+!captures/live/
+captures/live/*
+!captures/live/cap_0000.bin
+!captures/live/cap_0001.bin
+!captures/live/cap_0002.bin
+!captures/stream_rak3.bin
+!captures/stream_rak3.png
+!captures/stream_rak3_zoom.png
+analysis/sic_archive/
+analysis/sic_single/
+
+__pycache__/
+*.pyc
