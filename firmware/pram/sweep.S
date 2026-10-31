@@ -14,8 +14,8 @@
         ; Results go into PRAM itself, after the code. 0x804000 is the packet engine's DMA target
         ; in LoRa RX, and CPU access to a DMA-owned bank stalls the chip. The host reads PRAM back
         ; at CPU 0x101000+ with ReadRegMem32.
-        .equ OUT_BUF,         0x101C00  ; after the code + FFT tables (build.sh checks the image fits)
-        .equ OUT_MAX,         512       ; up to 0x102000
+        .equ OUT_BUF,         0x101C80  ; after the code + FFT tables (build.sh checks the image fits)
+        .equ OUT_MAX,         448       ; up to 0x102000
 
         .arc_attribute Tag_ARC_ABI_rf16, 1     ; 16-entry register file, matches fft.c (-mrf16)
         .section .text
@@ -33,7 +33,7 @@ entries:
         .word   badcmd
         .word   badcmd
         .word   fft_cmd                 ; 7 (fft.c: averaged FFT of a raw capture)
-        .word   capture_cmd             ; 8 (fft.c: capture driven from inside the command)
+        .word   badcmd                  ; 8: retired (capture only, debug)
         .word   capfft_cmd              ; 9 (fft.c: capture + FFT + dB in one command)
         .word   bench_cmd               ; 10 (fft.c: timing benchmark)
         .word   0

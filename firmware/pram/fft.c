@@ -1,8 +1,8 @@
 // On-chip spectrum: windowed 256-point FFTs over a raw capture, power averaged per bin.
 //
 //   entry 7 (fft_cmd):    FFT of a capture already in RAM (host ran it), u64 power sums at ACC.
-//   entry 8 (capture_cmd): capture only, driven from inside the command (debug).
-//   entry 9 (capfft_cmd): capture + FFT + dB in one command: 256 x u8 (0.5 dB steps) at ACC.
+//   entry 9 (capfft_cmd): capture + FFT + dB in one command: 256 x u8 (0.5 dB steps) at DBO;
+//                         optionally overlapped with the next capture.
 //
 // The capture (source 0, int8 I/Q, 250 kS/s with the 62.5 kHz LoRa setting) goes to 0x804000. The
 // capture DMA runs while this code holds the CPU, so the ROM's own handlers can drive it.
@@ -25,8 +25,11 @@ typedef signed char s8;
 
 #define N 256
 #define CAP ((const s8 *)0x804000)          // up to 5 KB
-#define ACC ((u64 *)0x805400)               // 256 x u64 power (entry 7); entry 9 writes 256 x u8 dB here
-#define W ((s16 *)0x805C00)                 // work: 256 x {s16 re, s16 im}, 1 KB
+#define ACC ((u64 *)0x805400)               // 256 x u64 power (entry 7)
+// Outside the capture bank (0x804000-0x805FFF is the DMA's while a capture runs), so the FFT and
+// the host's readback can run while the next capture fills it:
+#define DBO ((u8 *)0x807B00)                // entry 9 result: 256 x u8 half-dB
+#define W ((s16 *)0x807C00)                 // work: 256 x {s16 re, s16 im}, 1 KB, up to 0x808000
 // Twiddles {cos, -sin}(2 pi k / 256), k = 0..127, Q15, built in RAM from the quarter-wave table QC:
 // 0x807800-0x807FFF sits above the stack (top 0x8077F8) and nothing was seen writing it.
 #define TWR ((s16 *)0x807800)               // 512 B
@@ -127,13 +130,15 @@ static inline s32 hann(u32 n) {                     // Q15, from the twiddle cos
 // Stages 1-2 are fused with the windowed, bit-reversed load: with bit-reversed input, output
 // positions i..i+3 (i = bitrev(r), r < 64) of stage 2 come from samples r, r+128, r+64, r+192,
 // so each of 64 iterations is one multiply-free radix-4 butterfly. Stages 3-8: fft_stage.
-__attribute__((optimize("O2"))) static u32 fft256(const s8 *x) {
+// Front half: the max pre-pass and the fused load (the only parts that read the capture x).
+// Fills the scaling plan sh[8]; returns e.
+__attribute__((optimize("O2"))) static u32 fft_front(const s8 *x, u32 *sh) {
   s16 *w = W;
   // largest raw sample magnitude -> windowed bound (window <= 1): (|x| * 32767) >> 8
   u32 mx = 0;
   for (u32 n = 0; n < 2 * N; n++) { s32 v = x[n]; mx |= absv(v); }
   u32 m = (mx * 32767) >> 8;
-  u32 sh[8], e = 0;
+  u32 e = 0;
   for (u32 st = 0; st < 8; st++) {
     if (m > 8192) { sh[st] = 1; e++; } else { sh[st] = 0; m <<= 1; }
   }
@@ -155,8 +160,15 @@ __attribute__((optimize("O2"))) static u32 fft256(const s8 *x) {
     o[2] = (a1r + a3i) >> s2; o[3] = (a1i - a3r) >> s2;      // a3 * -j = (a3i, -a3r)
     o[6] = (a1r - a3i) >> s2; o[7] = (a1i + a3r) >> s2;
   }
-  if (bench_mode == 2) return 0;
-  for (u32 half = 4, st = 2; half < N; half <<= 1, st++) fft_stage(w, half, sh[st], TWR);
+  return e;
+}
+// Back half: stages 3-8 on W (no access to the capture).
+static void fft_back(const u32 *sh) {
+  for (u32 half = 4, st = 2; half < N; half <<= 1, st++) fft_stage(W, half, sh[st], TWR);
+}
+static u32 fft256(const s8 *x) {
+  u32 sh[8], e = fft_front(x, sh);
+  if (bench_mode != 1 && bench_mode != 2) fft_back(sh);
   return e;
 }
 
@@ -200,31 +212,35 @@ static inline u8 half_db32(u32 p, u32 e2) {        // e2 = 2e: power scale 4^e a
   return v < 0 ? 0 : v > 255 ? 255 : (u8)v;
 }
 
-// One-shot capture of nseg segments into 0x804000. Returns the final write pointer.
-// It ends in FS mode (synthesizer locked, receiver off), not standby: SetRx from FS takes 0.19 ms
-// instead of 1.27 ms from standby, so every frame after the first starts quickly.
-static u32 capture(u32 nseg, u32 *polls) {
-  static const u8 rx[3] = { 0xFF, 0xFF, 0xFF }, stop[6] = { 0xFF, 0, 0, 0, 0, 0 };
-  u32 words = nseg * (N * 2 / 4);
-  u8 cfg[10], ptr[2];
+// One-shot capture of `words` 32-bit words (128 per segment) into 0x804000, in two halves so the
+// CPU can work while the DMA fills the bank: cap_start arms it and starts RX; cap_finish polls the
+// write pointer, stops the capture and goes to FS, and returns the final pointer. FS rather than
+// standby: SetRx from FS takes 0.19 ms instead of 1.27 ms (synthesizer stays locked).
+static const u8 rx_cont[3] = { 0xFF, 0xFF, 0xFF };
+static void cap_start(u32 words) {
+  u8 cfg[10];
   cfg[0] = 0xFF; cfg[1] = 0; cfg[2] = 0; cfg[3] = 0; cfg[4] = 0; cfg[5] = 0xD0; cfg[6] = 0; cfg[7] = 0;
   cfg[8] = (u8)(words >> 8); cfg[9] = (u8)words;
+  H_CAPTURE_CFG(10, cfg, 0);
+  H_SET_RX(3, rx_cont, 0);
+}
+static u32 cap_finish(u32 words) {
+  static const u8 stop[6] = { 0xFF, 0, 0, 0, 0, 0 };
+  u8 ptr[2];
   struct resp pr;
   pr.len = 0; pr.buf = ptr;
-  u32 v = 0, n;
-  H_CAPTURE_CFG(10, cfg, 0);
-  H_SET_RX(3, rx, 0);
-  for (n = 0; n < POLL_MAX; n++) {
+  u32 v = 0;
+  for (u32 n = 0; n < POLL_MAX; n++) {
     H_CAPTURE_PTR(0, 0, &pr);
     v = ((u32)ptr[0] << 8) | ptr[1];
     if (v >= words * 4) break;
   }
   H_CAPTURE_CFG(6, stop, 0);
   H_SET_FS(0, 0, 0);
-  *polls = n;
   return v;
 }
-
+// Set while a capture started by an overlapped entry-9 call is still running (bank DMA-owned).
+static u32 armed __attribute__((section(".data"))) = 0;
 // Entry 7. Params: nseg, skip. 256 x u64 power at ACC. Returns 2 bytes: segments processed.
 int fft_cmd(u32 len, const u8 *p, struct resp *r) {
   if (len < 2) return 1;
@@ -235,31 +251,31 @@ int fft_cmd(u32 len, const u8 *p, struct resp *r) {
   return 3;
 }
 
-// Entry 8 (debug). Param: nseg (default 10). Returns 6 bytes: pointer (u16), polls (u32).
-int capture_cmd(u32 len, const u8 *p, struct resp *r) {
-  u32 nseg = len ? p[0] : MAXSEG, polls;
-  if (nseg == 0 || nseg > MAXSEG) return 1;
-  u32 v = capture(nseg, &polls);
-  r->buf[0] = v >> 8; r->buf[1] = v;
-  r->buf[2] = polls >> 24; r->buf[3] = polls >> 16; r->buf[4] = polls >> 8; r->buf[5] = polls;
-  r->len = 6;
-  return 3;
-}
-
-// Entry 9. Param: nseg (1..10). Capture nseg segments, average their spectra, write 256 x u8
-// half-dB values at ACC (natural FFT order: bin 0 = DC, 128..255 = negative frequencies).
+// Entry 9. Params: nseg (1..10) [, overlap]. Capture nseg segments, average their spectra, write
+// 256 x u8 half-dB values at DBO (natural FFT order: bin 0 = DC, 128..255 = negative frequencies).
 // Returns 4 bytes: segments (u16), capture pointer (u16); 0 segments = capture didn't complete.
+//
+// overlap (nseg 1 only): right after the windowed load has copied the samples into W, start the
+// next capture and leave it running; stages 3-8, the dB conversion, the host's readback and the
+// next command's setup all happen while it fills. The next call then usually finds it complete.
+// The capture bank stays DMA-owned in between: nseg 0 stops it (do that before anything else
+// touches 0x804000-0x805FFF, e.g. entry 7 or a host capture).
 int capfft_cmd(u32 len, const u8 *p, struct resp *r) {
   if (len < 1) return 1;
-  u32 nseg = p[0], polls;
-  if (nseg == 0 || nseg > MAXSEG) return 1;
-  u32 v = capture(nseg, &polls);
+  u32 nseg = p[0], ov = len > 1 ? p[1] : 0;
+  if (nseg > MAXSEG || (ov && nseg != 1)) return 1;
+  u32 v = 0, had = armed;
+  if (had) { armed = 0; v = cap_finish(N * 2 / 4); }   // started by the previous overlapped call
+  if (nseg == 0) return 2;
+  if (!ov || !had) { cap_start(nseg * (N * 2 / 4)); v = cap_finish(nseg * (N * 2 / 4)); }
   u32 done = 0;
   if (v >= nseg * N * 2) {
-    u8 *db = (u8 *)ACC;
+    u8 *db = DBO;
+    if (*TW_MARK != TW_MAGIC) tw_init();
     if (nseg == 1) {                                 // fast path: dB straight from the 32-bit power
-      if (*TW_MARK != TW_MAGIC) tw_init();
-      u32 e2 = 2 * fft256(CAP);
+      u32 sh[8], e2 = 2 * fft_front(CAP, sh);
+      if (ov) { cap_start(N * 2 / 4); armed = 1; }   // the capture is free again: refill it now
+      fft_back(sh);
       const s16 *w = W;
       for (u32 k = 0; k < N; k++) {
         s32 re = w[2 * k], im = w[2 * k + 1];
@@ -267,7 +283,7 @@ int capfft_cmd(u32 len, const u8 *p, struct resp *r) {
       }
     } else {
       spectrum(nseg, 0);
-      const u64 *acc = ACC;                          // in place: byte k lands in u64 k/8, already read
+      const u64 *acc = ACC;
       for (u32 k = 0; k < N; k++) db[k] = half_db(acc[k]);
     }
     done = nseg;

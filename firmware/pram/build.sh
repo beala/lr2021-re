@@ -3,7 +3,7 @@
 # Needs the patched ARC GCC image (blink allocatable, see docker/gcc-arc-blink.patch):
 #   docker build -t arc-gcc -f docker/Dockerfile.gcc docker
 # A stock GCC doesn't use blink with -fcall-saved-blink, and the image then doesn't fit.
-# Output: pram.bin (+ pram.lst). The image must end before the sweep's result buffer (0x101C00).
+# Output: pram.bin (+ pram.lst). The image must end before the sweep's result buffer (0x101C80).
 set -e
 cd "$(dirname "$0")"
 python3 gen_tables.py
@@ -20,4 +20,4 @@ docker run --rm -u "$(id -u):$(id -g)" -v "$PWD":/w -w /w arc-gcc sh -c '
 rm -f sweep.o fft.o bench.o
 size=$(stat -c %s pram.bin)
 echo "pram.bin: $size bytes"
-if [ "$size" -gt $((0x1C00 - 0x1000)) ]; then echo "image overlaps the sweep buffer at 0x101C00" >&2; exit 1; fi
+if [ "$size" -gt $((0x1C80 - 0x1000)) ]; then echo "image overlaps the sweep buffer at 0x101C80" >&2; exit 1; fi

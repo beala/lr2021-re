@@ -12,7 +12,8 @@
 //   loratx <hex>                    send one LoRa packet (explicit header, CRC on, 16-symbol preamble)
 //   rxstats                         hardware RX counters
 //   pinmon <ms> / pinsnap <n>       XIAO only: watch the pads wired to the MCU (docs/test-bus.md)
-//   wfrun <nseg> [frames]           stream the on-chip spectrum (PRAM entry 9) as binary frames until x
+//   wfrun <nseg> [frames] [ov]      stream the on-chip spectrum (PRAM entry 9) as binary frames until x;
+//                                   ov = 1: overlap the next capture with the FFT (nseg 1)
 //   help
 //
 // Receiver: while not held the chip receives LoRa with the current settings and prints one line
@@ -150,8 +151,10 @@ static void pinsnap(uint32_t n) {
 }
 #endif
 
-// wfrun <nseg> [frames]: repeat the PRAM capture + FFT + dB command (entry 9, firmware/pram; load it
-// with tools/pram.py) and stream binary frames, without host round trips. Prints "WFBIN <nseg>\n",
+// wfrun <nseg> [frames] [ov]: repeat the PRAM capture + FFT + dB command (entry 9, firmware/pram; load
+// it with tools/pram.py) and stream binary frames, without host round trips. With ov = 1 (nseg 1),
+// entry 9 leaves the next capture running while it computes, and a final "entry 9, nseg 0" stops it.
+// Prints "WFBIN <nseg>\n",
 // then per frame: A5 5A, seq (u16 LE), t_us (u32 LE, MCU time), chip_us (u32 LE, entry 9 runtime),
 // 256 x u8 half-dB (FFT order: bin 0 = DC, 128..255 negative). Stops on 'x' or after `frames`
 // (0 = until stopped), then prints "wfrun done <n>". Needs packet type 0x0B (the host sets it).
@@ -209,18 +212,18 @@ static int fastCmdRead(const uint8_t* cmd, size_t clen, uint8_t* out, size_t ole
   return (rx[0] >> 1) & 7;
 }
 
-static void wfrun(uint32_t nseg, uint32_t frames) {
+static void wfrun(uint32_t nseg, uint32_t frames, bool ov) {
   HalAccess* hal = static_cast<HalAccess*>(static_cast<ArduinoHal*>(radio.getMod()->hal));
   SPISettings saved = hal->spiSettings;
   hal->spiSettings = SPISettings(16000000, MSBFIRST, SPI_MODE0);
   static uint8_t frame[4 + 4 + 4 + 256];
-  uint8_t params[2] = { 9, (uint8_t)nseg }, rsp[4];
+  uint8_t rsp[4];
   Serial.printf("WFBIN %lu\n", (unsigned long)nseg);
   uint32_t n = 0, sumChip = 0, sumRead = 0, sumWrite = 0;
   while (frames == 0 || n < frames) {
     if (Serial.available() && Serial.read() == 'x') break;
     uint32_t t0 = micros();
-    uint8_t cmd[4] = { 0x01, 0x2D, params[0], params[1] };      // ActivatePram sub-command 9
+    uint8_t cmd[5] = { 0x01, 0x2D, 9, (uint8_t)nseg, (uint8_t)ov };   // ActivatePram sub-command 9
     int st = fastCmdRead(cmd, sizeof(cmd), rsp, 4, 200000);
     uint32_t chip = micros() - t0;
     if (st != 3 || rsp[1] == 0) {
@@ -229,7 +232,7 @@ static void wfrun(uint32_t nseg, uint32_t frames) {
       break;
     }
     uint32_t t1 = micros();
-    if (!fastMemRead(0x805400, frame + 12, 32) || !fastMemRead(0x805480, frame + 140, 32)) {
+    if (!fastMemRead(0x807B00, frame + 12, 32) || !fastMemRead(0x807B80, frame + 140, 32)) {
       Serial.println("\nwfrun error busy");
       break;
     }
@@ -240,6 +243,10 @@ static void wfrun(uint32_t nseg, uint32_t frames) {
     Serial.write(frame, sizeof(frame));
     sumChip += chip; sumRead += t2 - t1; sumWrite += micros() - t2;
     n++;
+  }
+  if (ov) {                                    // stop the capture left running (bank back to the CPU)
+    uint8_t stop[4] = { 0x01, 0x2D, 9, 0 };
+    fastCmdRead(stop, sizeof(stop), rsp, 0, 200000);
   }
   hal->spiSettings = saved;
   // averages per frame: chip command, SPI readback, USB write
@@ -318,10 +325,11 @@ static bool handleRadio(const char* cmd) {
 #endif
   if (!strncmp(cmd, "wfrun ", 6)) {
     char* q;
-    uint32_t nseg = strtoul(cmd + 6, &q, 0), frames = strtoul(q, NULL, 0);
+    uint32_t nseg = strtoul(cmd + 6, &q, 0), frames = strtoul(q, &q, 0), ov = strtoul(q, NULL, 0);
     if (nseg < 1 || nseg > 10) { Serial.println("  -> ERR nseg 1..10"); return true; }
+    if (ov && nseg != 1) { Serial.println("  -> ERR ov needs nseg 1"); return true; }
     stopRx();
-    wfrun(nseg, frames);
+    wfrun(nseg, frames, ov != 0);
     return true;
   }
   if (!strcmp(cmd, "rxstats")) {

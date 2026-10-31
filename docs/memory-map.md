@@ -61,7 +61,7 @@ PRAM is full: the 2240 B patch plus the 1840 B JLI table leave about 16 B free. 
 | 0x806000 | gp (small-data base) | [RE] |
 | 0x8060F8 | command router state | [RE] |
 | 0x8077F8 | PRAM patch variables (5 words, zeroed by its INI table); +0 = extension callback | [RE] |
-| 0x807800–0x807FFF | above the stack; untouched across RX, capture and FFTs (only 0x8076F8–0x8077BC changed). Used for the custom FFT's twiddle table ([pram-custom-commands.md](pram-custom-commands.md)) | [HW] |
+| 0x807800–0x807FFF | above the stack; untouched across RX, capture and FFTs (only 0x8076F8–0x8077BC changed). Used by the custom FFT: twiddle table, result and work buffer ([pram-custom-commands.md](pram-custom-commands.md)) | [HW] |
 
 ## Peripheral registers (not in the datasheet)
 

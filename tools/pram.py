@@ -27,9 +27,10 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_BLOB = os.path.join(HERE, '..', 'firmware', 'pram', 'pram.bin')
 PRAM_HOST = 0x801000      # write-only window into PRAM
 PRAM_CPU = 0x101000       # readable copy
-OUT_BUF = 0x101C00        # sweep results live in PRAM (0x804000 is DMA-owned during RX)
+OUT_BUF = 0x101C80        # sweep results live in PRAM (0x804000 is DMA-owned during RX)
 CAP_BUF = 0x804000        # raw capture (source 0, int8 I/Q)
-FFT_ACC = 0x805400        # entry 7: 256 x u64 power sums; entry 9: 256 x u8 half-dB
+FFT_ACC = 0x805400        # entry 7: 256 x u64 power sums
+FFT_DB = 0x807B00         # entry 9: 256 x u8 half-dB
 CAP_WORDS = 1280          # 5 KB = 10 segments of 256 samples
 
 
@@ -147,12 +148,12 @@ def host_fft(raw, nseg=10, skip=0):
     return acc
 
 
-def wf_stream(con, nseg, seconds):
+def wf_stream(con, nseg, seconds, overlap=False):
     """Run the console's wfrun for `seconds`; returns (rows of fftshifted dB, MCU times s, chip ms)."""
     import numpy as np
     s = con.s
     s.reset_input_buffer()
-    s.write(f'wfrun {nseg} 0\r'.encode())
+    s.write(f'wfrun {nseg} 0 {int(overlap)}\r'.encode())
     buf, end = b'', time.time() + 3
     while b'WFBIN' not in buf and time.time() < end:
         buf += s.read(4096)
@@ -180,10 +181,11 @@ def wf_stream(con, nseg, seconds):
             # the end-of-stream text can arrive split across reads: wait while it's a prefix of it
             if not (tail.startswith(b'wfrun') or b'wfrun'.startswith(tail[:5])):
                 raise RuntimeError(f'lost frame sync: {buf[:40]!r}')
-    # MCU micros() wraps every 2^32 us (~71.6 min): unwrap
+    # MCU micros() wraps every 2^32 us (~71.6 min): unwrap. Only a big backwards step is a wrap;
+    # the nRF52 core's micros() occasionally steps back a little, which isn't.
     out, prev, off = [], None, 0
     for t in times:
-        if prev is not None and t < prev:
+        if prev is not None and prev - t > 2 ** 31 / 1e6:
             off += 2 ** 32 / 1e6
         prev = t
         out.append(t + off)
@@ -208,6 +210,7 @@ def main():
     p = sub.add_parser('waterfall')
     p.add_argument('--seconds', type=float, default=10)
     p.add_argument('--nseg', type=int, default=10, help='256-sample segments averaged per frame (1..10)')
+    p.add_argument('--overlap', action='store_true', help='capture the next frame while computing this one (nseg 1)')
     p.add_argument('--save'); p.add_argument('--plot')
     p = sub.add_parser('fft')
     p.add_argument('--frames', type=int, default=1)
@@ -222,7 +225,7 @@ def main():
         con.cmd('hold on', 'hold st')
         con.rc(0x0128, 0, b'\0')
         con.rc(0x0207, 0, b'\x0b')                  # raw packet type, once
-        rows, times, chip_ms = wf_stream(con, args.nseg, args.seconds)
+        rows, times, chip_ms = wf_stream(con, args.nseg, args.seconds, args.overlap)
         dt = (times[-1] - times[0]) / max(len(times) - 1, 1)
         print(f'{len(rows)} frames in {times[-1] - times[0]:.2f} s = {1 / dt:.1f} frames/s; '
               f'on-chip capture+FFT+dB {np.median(chip_ms):.2f} ms per frame (nseg {args.nseg})')

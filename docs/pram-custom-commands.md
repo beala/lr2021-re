@@ -40,8 +40,8 @@ From the ROM (`pram_check` 0x24FC, ActivatePram handler 0x10AC4):
   `enter_s [r13-r19, ...]` faults. Keep state on the stack.
 - **RAM banks owned by a DMA.** In LoRa RX the packet engine's DMA owns the bank at 0x804000
   (its boot-default target); a CPU access from inside a command stalls the chip. The sweep
-  stores its results in PRAM after the code (0x101C00–0x101FFF) instead. The FFT runs with the
-  chip in standby after the capture is stopped, so it can use that bank.
+  stores its results in PRAM after the code (0x101C80–0x101FFF) instead. The FFT keeps its work
+  buffer and results outside the capture bank (0x804000–0x805FFF), so it can run while a capture fills it.
 - **Long commands.** BUSY stays high while a handler runs. RadioLib gives up after 1 s
   (−705), so the host splits long sweeps into chunks.
 - **Reading PRAM before activation** (above).
@@ -50,10 +50,10 @@ A hang needs a chip reset (`set radio …` or `hold off` in the console re-initi
 
 ## Spectrum sweep (entry 1)
 
-Parameters, big-endian: start Hz (4), step Hz (4, signed), points (2, ≤ 512), dwell (2),
+Parameters, big-endian: start Hz (4), step Hz (4, signed), points (2, ≤ 448), dwell (2),
 readings to average (2). For each point the chip retunes (the radio stays in continuous RX),
 waits dwell × 16 loop iterations, sums the instant-RSSI readings and stores the u16 sum at
-0x101C00 + 2·i. It returns the number of points as 2 bytes. Retuning in RX works: SetRfFrequency
+0x101C80 + 2·i. It returns the number of points as 2 bytes. Retuning in RX works: SetRfFrequency
 is accepted mid-RX and RSSI follows the new frequency.
 
 - **Settling:** the RSSI lags a retune. With 62.5 kHz RX bandwidth a dwell below ~1000
@@ -83,8 +83,8 @@ spectrum. The console's `wfrun` repeats that and streams binary frames to the PC
 | Entry | Does |
 |---|---|
 | 7 | FFT of a capture the host already ran; params `nseg skip`; 256 × u64 power at 0x805400 (used by `fft --check`) |
-| 8 | capture only, driven from inside the command (debug) |
-| 9 | **capture + FFT + dB**; param `nseg`; 256 × u8 half-dB at 0x805400 (bin 0 = DC, 128–255 negative) |
+| 8 | (retired: capture only, debug) |
+| 9 | **capture + FFT + dB**; params `nseg [overlap]`; 256 × u8 half-dB at 0x807B00 (bin 0 = DC, 128–255 negative). `nseg` 0 stops an overlapped capture |
 | 10 | timing benchmarks (below) |
 
 ### Results
@@ -95,6 +95,7 @@ spectrum. The console's `wfrun` repeats that and streams binary frames to the PC
 | 2 | 5.22 ms | 177 |
 | 4 | 9.85 ms | 97 |
 | 10 | 23.7 ms | 41 |
+| 1, overlapped (`--overlap`) | 1.72 ms | **464** |
 
 Per frame outside the chip: SPI readback 0.34 ms, USB 0.09 ms. Against numpy on the same capture
 (`tools/pram.py fft --check`): same peak bin, correlation 1.0000, 0.05 dB rms difference.
@@ -115,7 +116,7 @@ python3 tools/pram.py waterfall --seconds 20 --nseg 4 --save wf.npz --plot wf.pn
 python3 tools/pram.py fft --frames 5 --check --plot spectrum.png
 ```
 
-### How it got from 6.6 to 317 frames/s
+### How it got from 6.6 to 464 frames/s
 
 | Step | Effect |
 |---|---|
@@ -130,12 +131,44 @@ python3 tools/pram.py fft --frames 5 --check --plot spectrum.png
 | Load, window and stages 1–2 fused into one radix-4 pass | saves a pass over memory and most of the bit reversal |
 | Twiddles built in RAM from a 65-entry quarter-wave table | frees ~380 B of PRAM; RAM reads are also faster than PRAM reads |
 | dB straight from 32-bit power for 1 segment | skips the u64 accumulators |
+| Overlap: start the next capture as soon as the windowed load has copied the samples out | 2.73 → 1.72 ms per frame (below) |
 
 **FFT precision:** block floating point. Windowed input is ≤ 2¹⁴ per component, a radix-2 stage
 at most doubles the magnitude, so the plan (from the input's largest raw sample) runs stages
 unscaled while the worst-case bound stays ≤ 8192 per component and halves them after that.
 Magnitudes stay ≤ 2^14.5, so s16 storage, Q15 twiddle products and their sums fit in 32 bits;
 the scale exponent is folded back into the power.
+
+### Overlapped capture (entry 9 with `overlap` = 1)
+
+A frame used to be: capture (SetRx 0.19 ms + 1.02 ms of samples, CPU waiting), then FFT and dB
+(1.4 ms, receiver off). The capture DMA works while our code runs, and only the max pre-pass and
+the windowed load read the capture. So with `overlap` set, entry 9:
+
+1. waits for the capture the previous call started (normally already complete), stops it, goes
+   to FS;
+2. runs the max pre-pass and the windowed load from 0x804000 into the work buffer at 0x807C00;
+3. starts the next capture (SetRx from FS);
+4. runs stages 3–8 and the dB conversion, writes the result at 0x807B00 and returns, leaving
+   the capture running through the host's readback and the next command.
+
+The work buffer and the result were moved out of the capture bank (0x804000–0x805FFF) for this:
+the CPU and the host only touch 0x807xxx while the DMA owns the bank, and nothing stalls. With a
+carrier from the other board at +20 kHz, normal and overlapped mode agree: peak in the same bin in
+every frame, same level, same floor within one 0.5 dB step, no repeated frames.
+
+- Only `nseg` 1. The u64 accumulators for `nseg` > 1 live in the capture bank.
+- Before anything else touches 0x804000–0x805FFF (entry 7, a host capture), stop it with
+  `nseg` 0. `wfrun … 1` does that when it ends.
+- The capture only starts on SetRx from FS. Re-arming 0x0290 while the receiver keeps running,
+  or SetRx again while in RX, doesn't start it (the command then waits for a capture that never
+  comes), so the SetFs/SetRx pair per frame stays.
+- The command is now compute-bound: windowed load ~0.25 ms, SetRx 0.19 ms, stages 3–8 ~1 ms,
+  dB ~0.1 ms.
+
+```
+python3 tools/pram.py waterfall --seconds 20 --nseg 1 --overlap --save wf.npz --plot wf.png
+```
 
 ### CPU timing (entry 10)
 
@@ -161,10 +194,11 @@ load/window/radix-4 pass, the rest in stages 3–8.
 
 | Range | Use |
 |---|---|
-| 0x804000–0x8053FF | capture (up to 10 segments) |
-| 0x805400–0x805BFF | result: u64 power sums (entry 7) or u8 dB (entry 9) |
-| 0x805C00–0x805FFF | FFT work buffer, 256 × {s16 re, s16 im} |
+| 0x804000–0x8053FF | capture (up to 10 segments); the bank 0x804000–0x805FFF is the DMA's while a capture runs |
+| 0x805400–0x805BFF | u64 power sums (entry 7, entry 9 with `nseg` > 1) |
 | 0x807800–0x807A03 | twiddle table (built on first use) and its marker word |
+| 0x807B00–0x807BFF | entry 9 result: 256 × u8 half-dB |
+| 0x807C00–0x807FFF | FFT work buffer, 256 × {s16 re, s16 im} |
 
 0x807800–0x807FFF sits above the stack (top 0x8077F8). Over a receive, a capture and FFTs it kept
 its random power-up contents, while only 0x8076F8–0x8077BC changed, so nothing else seems to use
@@ -184,7 +218,7 @@ it. The FFT checks the marker and rebuilds the table if anything overwrote it.
 docker/Dockerfile.gcc docker`; builds the compiler from source, ~15 min) and the linker script
 `pram.ld`, which packs `.text`, `.rodata` and `.data` from 0x101000. Flags: `-mcpu=em4_dmips -mrf16
 -mno-sdata -Os -ffreestanding -fcall-saved-blink -mtune=arc700 -fschedule-insns -fsched-pressure`,
-with the hot FFT functions at `O2`. The build fails if the image reaches the sweep buffer at 0x101C00 or if
+with the hot FFT functions at `O2`. The build fails if the image reaches the sweep buffer at 0x101C80 or if
 anything lands in `.bss`. `pram.bin` is checked in, so `tools/pram.py` works without Docker.
 
 Pitfalls met along the way:
