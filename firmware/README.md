@@ -43,7 +43,7 @@ Debug commands (`src/console/LR2021DebugCLI.h`):
 |---|---|
 | `mr <addr> [words]` | ReadRegMem32: read words at a hex address, printed 8 per line (`AAAAAA: w0 ... w7`) |
 | `mw <addr> <value>` | WriteRegMem32: write one word |
-| `rc <op> <nread> [bytes..]` | Raw command: hex opcode, number of reply bytes, hex parameter bytes. Prints `rc st=<status> <reply bytes>` |
+| `rc <op> <nread> [bytes..]` | Raw command: hex opcode, number of reply bytes, hex parameter bytes. Prints `rc st=<status> <reply bytes> us=<time incl. BUSY>` |
 | `err` | Print and clear the chip error register |
 | `romprobe` | Read a few words at candidate ROM bases (how the ROM was located) |
 | `hold on\|off` | Stop/start the hardware LoRa receiver. `hold off` re-initialises the radio first if a capture command changed it |

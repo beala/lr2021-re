@@ -3,6 +3,7 @@
   python3 tools/pram.py [--port P] load [blob.bin]          upload, verify, activate
   python3 tools/pram.py [--port P] hello
   python3 tools/pram.py [--port P] sweep START_MHZ STOP_MHZ STEP_KHZ [--dwell N] [--avg N] [--out file.csv] [--plot file.png]
+  python3 tools/pram.py [--port P] fft [--frames N] [--check] [--plot file.png]   on-chip spectrum of the current channel
 
 The sweep keeps the radio in LoRa RX and retunes on the chip (ROM SetRfFrequency handler)
 between instant-RSSI readings; results come back through RAM 0x804000. Receive only.
@@ -20,10 +21,13 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from radio_ports import default_port
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-DEFAULT_BLOB = os.path.join(HERE, '..', 'firmware', 'pram', 'sweep.bin')
+DEFAULT_BLOB = os.path.join(HERE, '..', 'firmware', 'pram', 'pram.bin')
 PRAM_HOST = 0x801000      # write-only window into PRAM
 PRAM_CPU = 0x101000       # readable copy
-OUT_BUF = 0x101400        # results live in PRAM (0x804000 is DMA-owned during RX)
+OUT_BUF = 0x101A00        # sweep results live in PRAM (0x804000 is DMA-owned during RX)
+CAP_BUF = 0x804000        # raw capture (source 0, int8 I/Q)
+FFT_ACC = 0x805400        # 256 x u32 power sums written by the FFT command
+CAP_WORDS = 1280          # 5 KB = 10 segments of 256 samples
 
 
 class Console:
@@ -102,6 +106,43 @@ def sweep(con, start_hz, step_hz, n, dwell, avg):
     return [start_hz + i * step_hz for i in range(done)], dbm, dt
 
 
+def capture(con, words=CAP_WORDS):
+    """One-shot raw capture (source 0, int8 I/Q) into 0x804000, then stop: chip left in standby."""
+    con.rc(0x0128, 0, b'\0')
+    con.rc(0x0207, 0, b'\x0b')
+    con.rc(0x0290, 0, bytes([0xFF, 0, 0, 0, 0, 0xD0, 0, 0, words >> 8, words & 0xFF]))
+    con.rc(0x020C, 0, b'\xff\xff\xff')
+    end = time.time() + 1
+    while time.time() < end:
+        st, d = con.rc(0x0291, 2)
+        if st == 0 and int.from_bytes(d, 'big') >= 4 * words:
+            break
+    con.rc(0x0290, 0, bytes([0xFF, 0, 0, 0, 0, 0]))
+    con.rc(0x0128, 0, b'\0')
+
+
+def chip_fft(con, nseg=10, skip=0):
+    t0 = time.time()
+    st, d = con.rc(0x012D, 2, bytes([7, nseg, skip]))
+    if st != 0:
+        raise RuntimeError(f'fft failed: st={st}')
+    t1 = time.time()
+    acc = con.mr(FFT_ACC, 256)
+    return acc, t1 - t0, time.time() - t1
+
+
+def host_fft(raw, nseg=10, skip=0):
+    """The same windowed 256-point FFT power sum, in floating point, from the raw capture bytes."""
+    import numpy as np
+    b = np.frombuffer(raw, np.int8).astype(float)
+    z = b[0::2] + 1j * b[1::2]
+    win = 0.5 - 0.5 * np.cos(2 * np.pi * np.arange(256) / 256)
+    acc = np.zeros(256)
+    for s in range(skip, skip + nseg):
+        acc += np.abs(np.fft.fft(z[s * 256:(s + 1) * 256] * win)) ** 2
+    return acc
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--port', default=default_port('XIAO', '/dev/ttyACM0'))
@@ -113,10 +154,42 @@ def main():
     p.add_argument('--dwell', type=int, default=1000, help='settle time after each retune, x16 loop iterations (1000 ~ 1.4 ms)')
     p.add_argument('--avg', type=int, default=4, help='RSSI readings summed per point')
     p.add_argument('--out'); p.add_argument('--plot')
+    p = sub.add_parser('fft')
+    p.add_argument('--frames', type=int, default=1)
+    p.add_argument('--check', action='store_true', help='also read the raw capture and compare with numpy')
+    p.add_argument('--plot')
     args = ap.parse_args()
     con = Console(args.port)
     if args.what == 'load':
         sys.exit(0 if load(con, args.blob) else 1)
+    if args.what == 'fft':
+        import numpy as np
+        con.cmd('hold on', 'hold st')
+        freq = np.fft.fftshift(np.fft.fftfreq(256, 1 / 250e3))
+        frames = []
+        for k in range(args.frames):
+            t0 = time.time(); capture(con); tc = time.time() - t0
+            acc, tf, tr = chip_fft(con)
+            p = np.array(acc, float)
+            frames.append(p)
+            print(f'frame {k}: capture {tc * 1e3:.0f} ms, on-chip FFT {tf * 1e3:.0f} ms, readback {tr * 1e3:.0f} ms; '
+                  f'peak {freq[np.argmax(np.fft.fftshift(p))] / 1e3:+.1f} kHz')
+            if args.check:
+                words = con.mr(CAP_BUF, CAP_WORDS)
+                raw = b''.join(struct.pack('<I', w) for w in words)
+                h = host_fft(raw)
+                a, b2 = 10 * np.log10(np.fft.fftshift(p) + 1), 10 * np.log10(np.fft.fftshift(h) + 1)
+                off = np.median(a - b2)
+                print(f'  vs numpy on the same capture: peak bin chip {np.argmax(p)} / host {np.argmax(h)}, '
+                      f'correlation {np.corrcoef(a, b2)[0, 1]:.4f}, rms dB difference {np.sqrt(np.mean((a - b2 - off) ** 2)):.2f}')
+        if args.plot:
+            import matplotlib; matplotlib.use('Agg'); import matplotlib.pyplot as plt
+            plt.figure(figsize=(10, 4))
+            for p in frames:
+                plt.plot(freq / 1e3, 10 * np.log10(np.fft.fftshift(p) + 1), lw=.8)
+            plt.xlabel('offset (kHz)'); plt.ylabel('power (dB, arbitrary)'); plt.grid(alpha=.3); plt.tight_layout()
+            plt.savefig(args.plot, dpi=100)
+        return
     if args.what == 'hello':
         st, data = con.rc(0x012D, 6, b'\x02\xAB')
         print(f'st={st} data={data.hex()} ({data[:4]!r}, param len {data[4] if len(data) > 4 else "?"})')

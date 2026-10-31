@@ -149,10 +149,12 @@ static bool handle(LR2021Dev& r, const char* cmd, Stream& out) {
     }
     if (nread > sizeof(outb)) nread = sizeof(outb);
     memset(outb, 0, sizeof(outb));
+    uint32_t t0 = micros();
     int16_t st = r.rawCmd(op, in, inLen, outb, nread);
+    uint32_t us = micros() - t0;
     out.print("rc st="); out.print(st);
     for (size_t i = 0; i < nread; i++) { char b[4]; snprintf(b, sizeof(b), " %02X", outb[i]); out.print(b); }
-    out.println();
+    out.print(" us="); out.println(us);  // command time incl. BUSY wait (e.g. PRAM command runtime)
     return true;
   }
   if (strcmp(cmd, "hold on") == 0 || strcmp(cmd, "hold off") == 0) {

@@ -14,15 +14,15 @@
         ; Results go into PRAM itself, after the code. 0x804000 is the packet engine's DMA target
         ; in LoRa RX, and CPU access to a DMA-owned bank stalls the chip. The host reads PRAM back
         ; at CPU 0x101000+ with ReadRegMem32.
-        .equ OUT_BUF,         0x101400
-        .equ OUT_MAX,         1536      ; up to 0x102000
+        .equ OUT_BUF,         0x101A00  ; after the code + FFT tables (build.sh checks the image fits)
+        .equ OUT_MAX,         768       ; up to 0x102000
 
         .section .text
         .global _start
 _start:
 header:
         .word   0x600DB002              ; magic checked by pram_check
-        .word   0x00000007              ; low byte: 7 entries
+        .word   0x00000008              ; low byte: 8 entries
 entries:
         .word   install                 ; 0
         .word   sweep                   ; 1
@@ -31,6 +31,7 @@ entries:
         .word   rssi1                   ; 4 (debug: one RSSI read)
         .word   storetest               ; 5 (debug: one store to OUT_BUF)
         .word   onepoint                ; 6 (debug: one sweep iteration, no store)
+        .word   fft_cmd                 ; 7 (fft.c: averaged FFT of a raw capture)
         .word   0
 
 ; ---------------------------------------------------------------- 0: install

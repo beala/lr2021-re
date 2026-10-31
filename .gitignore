@@ -32,7 +32,7 @@ dut.log
 caps/
 results/
 
-# PRAM blob build intermediates (sweep.bin is kept)
+# PRAM blob build intermediates (pram.bin is kept)
 firmware/pram/*.elf
 firmware/pram/*.lst
 firmware/pram/*.o

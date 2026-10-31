@@ -74,7 +74,7 @@ which has no location set.
 | [docs/raw-iq.md](docs/raw-iq.md) | Hidden packet type 0x0B, 0x0290 capture, continuous IQ streaming, LRIQ wire format |
 | [docs/software-receiver.md](docs/software-receiver.md) | Software LoRa decoder, live sniffer, hardware-vs-software comparison, offline SIC |
 | [docs/rate-bench.md](docs/rate-bench.md) | Max LoRa/FLRC throughput, raw IQ TX/RX limits, 2 m APRS from the LR2021, reserved codes (SF0–4, ldro=2, packet type 0x01) |
-| [docs/pram-custom-commands.md](docs/pram-custom-commands.md) | Running your own code on the LR2021: the PRAM command interface, pitfalls, and an on-chip spectrum sweep |
+| [docs/pram-custom-commands.md](docs/pram-custom-commands.md) | Running your own code on the LR2021: the PRAM command interface, pitfalls, an on-chip spectrum sweep and FFT |
 | [docs/test-bus.md](docs/test-bus.md) | Undocumented test bus on the DIO pads (0x012F): selector map, packet flags; DIO function codes |
 | [docs/dualband-bench.md](docs/dualband-bench.md) | 908 MHz / 2478 MHz dual-band CAD scanning: switch time, catch rates |
 | [firmware/README.md](firmware/README.md) | The test firmware: console (`mr`, `mw`, `rc`, `stream`, `iqstream`, LoRa RX/TX), benches, boards |
@@ -118,8 +118,8 @@ Data tables:
   - LoRa bandwidth codes 0x0/0x1/0x8/0x9 are the narrow SX127x bandwidths (7.8–20.8 kHz);
   - packet type 0x01 is an empty slot that reuses the previous modem's setup.
 - **Custom code runs on the chip:** a PRAM blob adds host commands through ActivatePram
-  (0x012D). An on-chip sweep covers 902–928 MHz in 1,041 points in 2.2 s
-  ([pram-custom-commands.md](docs/pram-custom-commands.md)).
+  (0x012D). An on-chip sweep covers 902–928 MHz in 1,041 points in 2.2 s, and an on-chip
+  256-point FFT runs in 4 ms ([pram-custom-commands.md](docs/pram-custom-commands.md)).
 - Measured maxima: LoRa SF5/1000 kHz delivers 118 kbps, FLRC 2.08 Mbps. The chip's raw IQ TX
   path can transmit 2 m APRS that a Kenwood handheld decodes.
 

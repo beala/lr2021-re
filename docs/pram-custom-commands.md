@@ -3,7 +3,8 @@
 The LR2021 runs its own code from the 4 KB Patch RAM. Semtech's patch normally lives there, but
 RadioLib (and this repo's firmware) never loads it, so on these boards all of PRAM is free. A
 blob with the right header becomes a set of new host commands, reached through ActivatePram
-(0x012D). Source: `firmware/pram/sweep.S`. Host tool: `tools/pram.py`.
+(0x012D). Source: `firmware/pram/` (`sweep.S`: header, entry table, sweep; `fft.c`: FFT). Host
+tool: `tools/pram.py`.
 
 ## Interface
 
@@ -39,7 +40,8 @@ From the ROM (`pram_check` 0x24FC, ActivatePram handler 0x10AC4):
   `enter_s [r13-r19, ...]` faults. Keep state on the stack.
 - **RAM banks owned by a DMA.** In LoRa RX the packet engine's DMA owns the bank at 0x804000
   (its boot-default target); a CPU access from inside a command stalls the chip. The sweep
-  stores its results in PRAM after the code (0x101400–0x101FFF) instead.
+  stores its results in PRAM after the code (0x101A00–0x101FFF) instead. The FFT runs with the
+  chip in standby after the capture is stopped, so it can use that bank.
 - **Long commands.** BUSY stays high while a handler runs. RadioLib gives up after 1 s
   (−705), so the host splits long sweeps into chunks.
 - **Reading PRAM before activation** (above).
@@ -48,16 +50,17 @@ A hang needs a chip reset (`set radio …` or `hold off` in the console re-initi
 
 ## Spectrum sweep (entry 1)
 
-Parameters, big-endian: start Hz (4), step Hz (4, signed), points (2, ≤ 1536), dwell (2),
+Parameters, big-endian: start Hz (4), step Hz (4, signed), points (2, ≤ 768), dwell (2),
 readings to average (2). For each point the chip retunes (the radio stays in continuous RX),
 waits dwell × 16 loop iterations, sums the instant-RSSI readings and stores the u16 sum at
-0x101400 + 2·i. It returns the number of points as 2 bytes. Retuning in RX works: SetRfFrequency
+0x101A00 + 2·i. It returns the number of points as 2 bytes. Retuning in RX works: SetRfFrequency
 is accepted mid-RX and RSSI follows the new frequency.
 
 - **Settling:** the RSSI lags a retune. With 62.5 kHz RX bandwidth a dwell below ~1000
   (≈ 1.4 ms) still reads the previous frequency.
 - **Speed:** 902–928 MHz in 25 kHz steps (1,041 points), dwell 1000, 4 readings averaged:
-  **2.2 s including the readback**, about 2.1 ms per point. Floor about −121 dBm.
+  **2.2 s including the readback**; on the chip 100 points take 203 ms (~2 ms per point).
+  Floor about −121 dBm.
 
 ```
 python3 tools/pram.py load                       # after "set radio 908,62.5,7,5" in the console
@@ -71,6 +74,31 @@ The waterfall (30 sweeps, ~70 s) shows the test carrier at 912 MHz from the othe
 packets, energy only, nothing decoded), one unidentified burst at 912.2 MHz, and a rise at
 928 MHz present in every sweep.
 
+## On-chip FFT (entry 7, `fft.c`)
+
+The host takes a one-shot raw capture (source 0, int8 I/Q at 250 kS/s with the 62.5 kHz LoRa
+setting; 1,280 words = 5 KB = 10 segments of 256 samples into 0x804000), stops it, and leaves
+the chip in standby. Entry 7 then runs on the chip, with parameters `nseg skip`:
+
+- Hann window (Q15), 256-point radix-2 FFT in int32 with Q15 twiddles (int8 input grows at most
+  256×, so no per-stage scaling), power per bin summed over the segments.
+- Result: 256 × u32 at 0x805400 (bin 0 = DC, bins 128–255 = negative frequencies). The work
+  buffer is at 0x805800.
+- **3.97 ms per 256-point FFT** (window, FFT and power) on the chip, 37.8 ms for all 10 segments.
+- The host reads back 1 KB of spectrum instead of 5 KB of IQ.
+
+Checked against numpy on the same capture (`tools/pram.py fft --check`): same peak bin,
+correlation 1.0000, 0.09 dB rms difference across the 256 bins.
+
+![On-chip FFT vs numpy](figures/onchip_fft.png)
+
+A frame currently takes ~0.45 s end to end, almost all of it the ~8 host commands needed for the
+capture through the USB console. Moving the capture into the command would make it one command.
+
+```
+python3 tools/pram.py fft --frames 5 --check --plot spectrum.png
+```
+
 ## Other entries
 
 | k | Name | What it does |
@@ -80,9 +108,13 @@ packets, energy only, nothing decoded), one unidentified burst at 912.2 MHz, and
 | 4 | rssi1 | one instant-RSSI read (2 bytes, raw) |
 | 5 | storetest | writes and reads back one halfword in the PRAM result buffer |
 | 6 | onepoint | one sweep step without storing (debug) |
+| 7 | fft | averaged 256-point FFT of a raw capture (above) |
 
 ## Build
 
-`firmware/pram/build.sh` assembles with the ARC binutils image (`docker build -t arc-binutils
-docker`): `-mcpu=em4_dmips`, linked at 0x101000. `sweep.bin` is checked in, so `tools/pram.py`
-works without Docker.
+`firmware/pram/build.sh` builds `pram.bin` with ARC GCC 13 (`docker build -t arc-gcc -f
+docker/Dockerfile.gcc docker`): `-mcpu=em4_dmips -mrf16 -mno-sdata -Os -ffreestanding`, linked at
+0x101000. `-mrf16` matches the 16-register CPU; `-mno-sdata` keeps the compiler away from gp,
+which belongs to the ROM. The build fails if the image would reach the sweep buffer at 0x101A00.
+`pram.bin` is checked in, so `tools/pram.py` works without Docker. The console's `rc` prints
+`us=` (command time including BUSY), which is how the timings above were measured.
