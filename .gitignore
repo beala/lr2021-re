@@ -36,3 +36,4 @@ results/
 firmware/pram/*.elf
 firmware/pram/*.lst
 firmware/pram/*.o
+docker/gcc-patch-check-work/

@@ -8,9 +8,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       libgmp-dev libmpfr-dev libmpc-dev patch \
  && rm -rf /var/lib/apt/lists/*
 ARG GCC_VER=13.3.0
+# PATCH=0 builds the same compiler unpatched (baseline for docker/check-gcc-patch.sh)
+ARG PATCH=1
 COPY gcc-arc-blink.patch /src/
 RUN cd /src && curl -fsSL https://ftp.gnu.org/gnu/gcc/gcc-$GCC_VER/gcc-$GCC_VER.tar.xz | tar xJ \
- && cd gcc-$GCC_VER && patch -p1 < ../gcc-arc-blink.patch \
+ && cd gcc-$GCC_VER && if [ "$PATCH" = 1 ]; then patch -p1 < ../gcc-arc-blink.patch; fi \
  && mkdir ../build && cd ../build \
  && ../gcc-$GCC_VER/configure --target=arc-linux-gnu --prefix=/usr \
       --with-as=/usr/bin/arc-linux-gnu-as --with-ld=/usr/bin/arc-linux-gnu-ld \

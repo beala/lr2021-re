@@ -119,8 +119,8 @@ Data tables:
   - LoRa bandwidth codes 0x0/0x1/0x8/0x9 are the narrow SX127x bandwidths (7.8–20.8 kHz);
   - packet type 0x01 is an empty slot that reuses the previous modem's setup.
 - **Custom code runs on the chip:** a PRAM blob adds host commands through ActivatePram
-  (0x012D). The CPU is an ARCv2 EM at 32.1 MHz with a 16-entry register file; a 9-line GCC
-  patch frees a 13th register for C ([lr2021-cpu.md](docs/lr2021-cpu.md)). An on-chip sweep covers 902–928 MHz in 1,041 points in 2.2 s, and an on-chip
+  (0x012D). The CPU is an ARCv2 EM at 32.1 MHz with a 16-entry register file; a small GCC
+  patch (checked against GCC's torture tests) frees a 13th register for C ([lr2021-cpu.md](docs/lr2021-cpu.md)). An on-chip sweep covers 902–928 MHz in 1,041 points in 2.2 s, and an on-chip
   capture + FFT streams a live waterfall at up to 464 frames/s (the next capture overlapped with the FFT) ([pram-custom-commands.md](docs/pram-custom-commands.md)).
 - Measured maxima: LoRa SF5/1000 kHz delivers 118 kbps, FLRC 2.08 Mbps. The chip's raw IQ TX
   path can transmit 2 m APRS that a Kenwood handheld decodes.

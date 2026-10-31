@@ -209,13 +209,40 @@ be a 13th in any function that saves it, but GCC never uses it, even with `-fcal
 The reason: `arc_epilogue_uses` reports blink live at the function exit, so the dataflow sees
 it live from entry to exit, and it conflicts with everything.
 
-`docker/gcc-arc-blink.patch` (9 lines) reports it only once the epilogue exists (as GCC's ARM
-port does for lr), and only when `-fcall-saved-blink` is given:
-- the prologue then saves blink whenever it was allocated;
-- the epilogue restores it before `j_s [blink]`;
-- calls already clobber it explicitly.
+`docker/gcc-arc-blink.patch` makes two changes, both only when `-fcall-saved-blink` is given:
+
+1. `arc_epilogue_uses` reports blink live only once the epilogue exists (as GCC's ARM port does
+   for lr). The prologue then saves blink whenever it was allocated, the epilogue restores it
+   before `j_s [blink]`, and calls already clobber it explicitly.
+2. `REGNO_OK_FOR_BASE_P` accepts blink as an address base register, as it already does for r30
+   when r30 isn't fixed. Without this, the allocator (whose base class includes blink) can put
+   an address in blink, and a later check rejects it with an internal compiler error. The
+   hardware's 32-bit loads and stores take r31 as a base like any other register.
 
 Without the flag GCC behaves as before.
+
+#### Testing the patch
+
+GCC's own test suite needs a simulator to run its execution tests, and there's no free one for
+ARC EM. Instead, `docker/check-gcc-patch.sh` compiles GCC 13.3's torture and ARC target tests
+(5,197 files) to assembly with the patched compiler and with the same compiler built unpatched,
+and compares:
+
+| Configuration | Result |
+|---|---|
+| `-O2 -mrf16` and `-O2` (full register file), no flag | **byte-identical assembly** for all 4,828 files that compile |
+| `-O2 -mrf16 -fcall-saved-blink` | no compiler errors (unpatched GCC: 3); 158 functions in 73 files allocate blink |
+| `-Os -mrf16 -fcall-saved-blink` | the same 2 errors as unpatched GCC (`taux-1.c`, `uncached-6.c`, unrelated); 46 functions allocate blink |
+| `-O2 -fcall-saved-blink` | no compiler errors (unpatched: 1); 26 functions allocate blink |
+
+In every function that allocates blink, the prologue saves it and, if the function returns,
+the epilogue restores it (functions ending in `exit` don't). Unpatched GCC's own
+`-fcall-saved-blink` errors were the same base-register problem, so change 2 fixes those too.
+
+A first version of the patch (change 1 only) passed the FFT on hardware but failed this check:
+up to 11 new compiler errors per configuration, all blink used as an address base. Not covered:
+running the execution tests. Generated code with blink is only checked statically, plus the FFT
+results on the chip.
 
 ### Scheduling
 
