@@ -68,14 +68,27 @@ The rate comes from the 0x0291 write pointer and from where the carrier lands.
 | 1 | int8 I, int8 Q | 250 kS/s | same filter and level as source 0 | a different tap at the same scale; not told apart yet |
 | 2 | int16 I, int16 Q (LE) | 250 kS/s | same filter, deeper stopband (≈ −34 dB) | the IQ16 transport |
 | 3 | int16 I, int16 Q (LE) | 250 kS/s | **before the final channel filter**: flat to ~60 kHz, −9 dB at 80 kHz, −17 dB at 120 kHz | ~2× source 2's level |
-| 4 | 11-bit I, Q, left-aligned in int16 (LE) | **~8 MS/s** | **wideband complex baseband**: the carrier lands at its offset (+50 kHz → +50 kHz) | residual line at ±330 kHz (IF leakage) |
+| 4 | 11-bit I, Q, left-aligned in int16 (LE) | **~8 MS/s** (at BW 62.5 kHz) | **wideband complex baseband**: the carrier lands at its offset (+50 kHz → +50 kHz); flat noise to about ±2 MHz | residual line at −332 kHz (IF leakage); passband tilted toward positive offsets |
 | 5 | 11-bit I, Q, left-aligned in int16 (LE) | **~8 MS/s** | **low-IF signal before the final mixer**: a carrier at offset *f* appears at ≈ 330 kHz + *f* | strong fixed lines with no signal |
 | 6 | int8 I, int8 Q | 250 kS/s | same filter as source 0, **4× the amplitude** (+12 dB) | a tap before a ÷4 scaling, or after extra gain |
 
-Sources 4 and 5 run at about 8 MS/s (probably 32 MHz / 4) even with a narrow LoRa bandwidth,
-so one 8 KB capture is a 256 µs, ±4 MHz-wide snapshot. That's too fast to stream over SPI,
-but useful as a spectrum snapshot around the RX frequency. Their rate at other LoRa bandwidths
-wasn't measured. The ~330 kHz IF is for BW 62.5 kHz.
+At the 62.5 kHz setting, sources 4 and 5 run at about 8 MS/s (probably 32 MHz / 4), so one
+8 KB capture is a 256 µs snapshot. That's too fast to stream over SPI, but useful as a
+spectrum snapshot around the RX frequency
+([figure](figures/source4_snapshot.png): idle, a CW carrier and an SF5 / 1000 kHz LoRa packet):
+
+- The noise floor is flat out to about ±2 MHz. Beyond that, noise rises 30–40 dB, which looks
+  like the ADC's noise shaping, not signals.
+- The passband isn't symmetric. An SF5 / 1000 kHz LoRa packet comes through with the upper half
+  of each chirp (0 to +0.5 MHz) about 20 dB stronger than the lower half. That fits an analog IF
+  filter centred above the RX frequency (low IF ≈ +330 kHz).
+- A fixed line at −332 kHz (IF leakage) is always there.
+- In the LoRa snapshot the signal drops after ~70 µs, probably the AGC reducing gain during the
+  capture.
+
+At the 1000 kHz setting, source 4 fills 8 KB much faster and looks different: flat noise and one
+strong line at −0.083 × the sample rate, with no LoRa visible. Its rate and IF there weren't
+worked out. The ~330 kHz IF is for BW 62.5 kHz.
 
 Debug console: `cap <cfg> <words> <ms>` and `capwait <cfg> <ratio> <ms>`
 ([firmware/README.md](../firmware/README.md)).
