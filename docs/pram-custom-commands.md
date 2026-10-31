@@ -3,50 +3,12 @@
 The LR2021 runs its own code from the 4 KB Patch RAM. Semtech's patch normally lives there, but
 RadioLib (and this repo's firmware) never loads it, so on these boards all of PRAM is free. A
 blob with the right header becomes a set of new host commands, reached through ActivatePram
-(0x012D). Source: `firmware/pram/` (`sweep.S`: header, entry table, sweep; `fft.c`: FFT). Host
-tool: `tools/pram.py`.
+(0x012D). Source: `firmware/pram/` (`sweep.S`: header, entry table, sweep; `fft.c`: FFT;
+`bench.S`: CPU benchmarks). Host tool: `tools/pram.py`.
 
-## Interface
-
-From the ROM (`pram_check` 0x24FC, ActivatePram handler 0x10AC4):
-
-| Address | Contents |
-|---|---|
-| 0x101000 | magic 0x600DB002 |
-| 0x101004 | low byte = number of entries |
-| 0x101008 | entry table: one code address per entry |
-
-- **Activation:** `0x012D 00`. `pram_check` finds the magic, stores `[0x8007F0]` = 0x101008
-  (the entry table) and `[0x8007F4]` = 0x101000, and calls entry 0. Entry 0 must return 2 for
-  the PRAM to count as active.
-- **Calling:** `0x012D k <params>`, with 1 ≤ k < entry count, calls entry k with
-  - `r0` = parameter length (without the k byte);
-  - `r1` = pointer to the parameters;
-  - `r2` = pointer to a response struct `{u32 length; u8 *buffer}`.
-
-  The return value is the command status: 2 = OK, 1 = parameter error, 0 = fail, **3 = data**
-  (fill the buffer and set the length, as the ROM's getters do, e.g. 0x0291 at 0x5B44).
-- **Loading:** WriteRegMem32 to host address 0x801000 (write-only), then activate. Only after
-  activation can the code be read back at CPU 0x101000; reading it earlier stalls the chip
-  (`pram_check` sets the bank mapping in aux 0x80000008).
-- Handlers can call ROM routines directly, e.g. the SetRfFrequency handler 0xFC00
-  (`r0 = 4`, `r1` = big-endian Hz) and the instant-RSSI routine 0x5C4C (returns 9 bits,
-  dBm = −value/2).
-
-## Things that hang the chip
-
-- **Registers r16–r25 don't exist.** The CPU has the reduced 16-entry register file
-  (RF_BUILD 0x4B02, bit 9): only r0–r3, r10–r15 and r26–r31. The ROM sticks to those.
-  `enter_s [r13-r19, ...]` faults. Keep state on the stack.
-- **RAM banks owned by a DMA.** In LoRa RX the packet engine's DMA owns the bank at 0x804000
-  (its boot-default target); a CPU access from inside a command stalls the chip. The sweep
-  stores its results in PRAM after the code (0x101C80–0x101FFF) instead. The FFT keeps its work
-  buffer and results outside the capture bank (0x804000–0x805FFF), so it can run while a capture fills it.
-- **Long commands.** BUSY stays high while a handler runs. RadioLib gives up after 1 s
-  (−705), so the host splits long sweeps into chunks.
-- **Reading PRAM before activation** (above).
-
-A hang needs a chip reset (`set radio …` or `hold off` in the console re-initialises it).
+This page covers the commands themselves. **How the CPU and PRAM work** is in
+[lr2021-cpu.md](lr2021-cpu.md): the blob format and calling convention, registers, timing,
+memory, the DMA rules, the toolchain and the GCC patch, and what hangs the chip.
 
 ## Spectrum sweep (entry 1)
 
@@ -131,7 +93,7 @@ python3 tools/pram.py fft --frames 5 --check --plot spectrum.png
 | Raw 16 MHz SPI for the command and the readback | readback 1.73 → 0.34 ms |
 | 16-bit block-floating-point FFT (no 64-bit maths) | 3.8 → 2.3 ms per FFT |
 | Butterfly stages 3–8 in hand-written assembly | GCC spilled registers to the stack (only 16 exist) |
-| Back to C with a patched GCC (blink allocatable) and the ARC700 pipeline model | 1.29 → 1.21 ms per FFT, faster than the assembly (below) |
+| Back to C with a patched GCC (blink allocatable) and the ARC700 pipeline model | 1.29 → 1.21 ms per FFT, faster than the assembly ([details](lr2021-cpu.md#the-gcc-patch-blink-as-a-13th-register)) |
 | Load, window and stages 1–2 fused into one radix-4 pass | saves a pass over memory and most of the bit reversal |
 | Twiddles built in RAM from a 65-entry quarter-wave table | frees ~380 B of PRAM; RAM reads are also faster than PRAM reads |
 | dB straight from 32-bit power for 1 segment | skips the u64 accumulators |
@@ -176,19 +138,9 @@ python3 tools/pram.py waterfall --seconds 20 --nseg 1 --overlap --save wf.npz --
 
 ### CPU timing (entry 10)
 
-`rc 012D 0 0A <mode>` runs a benchmark; time it with the console's `us=`. Mode 0 is 10⁶ iterations
-of a one-NOP zero-overhead loop: 31.3 ms, so **the CPU runs at 32.1 MHz**. Modes 16–22 loop one
-instruction type:
-
-| Loop body | Cycles per iteration |
-|---|---|
-| `nop_s` | 1.0 |
-| 2 × `nop_s` | 3.0 |
-| 2 × 32-bit `add` with a 32-bit constant | 4.0 |
-| `ldh.x` from 0x805C00 | 2.0 |
-| `sth` to 0x805C00 | 1.0 |
-| `mpyw` (16×16) | 3.0 |
-| `mpy` (32×32) | 3.0 |
+`rc 012D 0 0A <mode>` runs a benchmark; time it with the console's `us=`. Mode 0: 10⁶ one-cycle
+loop iterations (the CPU clock, 32.1 MHz); 4: ten full FFTs; 16–22: one instruction type each.
+Results: [lr2021-cpu.md](lr2021-cpu.md#timing-hw).
 
 A radix-2 butterfly (4 multiplies, 4 loads, 4 stores, ~12 ALU ops) costs 36–40 cycles. A full
 256-point FFT is ~39k cycles (1.21 ms): ~2.6k for the max pre-pass, ~5k for the fused
@@ -213,53 +165,12 @@ it. The FFT checks the marker and rebuilds the table if anything overwrote it.
 | k | Name | What it does |
 |---|---|---|
 | 2 | hello | returns `LRC1`, the parameter length and the first parameter byte |
-| 3–6 | (retired) | debug entries used while building the sweep; now return 1 |
-| 7–10 | fft, capture, capfft, bench | see above |
+| 3–6, 8 | (retired) | debug entries used while building the sweep and the capture; now return 1 |
+| 7, 9, 10 | fft, capfft, bench | see above |
 
 ## Build
 
-`firmware/pram/build.sh` builds `pram.bin` with a patched ARC GCC 13.3 (`docker build -t arc-gcc -f
-docker/Dockerfile.gcc docker`; builds the compiler from source, ~15 min) and the linker script
-`pram.ld`, which packs `.text`, `.rodata` and `.data` from 0x101000. Flags: `-mcpu=em4_dmips -mrf16
--mno-sdata -Os -ffreestanding -fcall-saved-blink -mtune=arc700 -fschedule-insns -fsched-pressure`,
-with the hot FFT functions at `O2`. The build fails if the image reaches the sweep buffer at 0x101C80 or if
-anything lands in `.bss`. `pram.bin` is checked in, so `tools/pram.py` works without Docker.
-
-Pitfalls met along the way:
-- `-mrf16` matches the 16-register CPU. Assembly files need `.arc_attribute Tag_ARC_ABI_rf16, 1`
-  too, or the linker refuses to mix them with the C objects.
-- With `-mrf16`, stock GCC allocates only 12 registers: r0–r3, r10–r15, r30 and fp. blink (r31)
-  would be a 13th in any function that saves it, but GCC never uses it, even with
-  `-fcall-saved-blink`: `arc_epilogue_uses` reports blink live at the function exit, so the
-  dataflow sees it live from entry to exit and it conflicts with everything.
-  `docker/gcc-arc-blink.patch` reports it only once the epilogue exists (as the ARM port does
-  for lr) when `-fcall-saved-blink` is given. The prologue then saves blink whenever it was
-  allocated, the epilogue restores it before `j_s [blink]`, and calls already clobber it.
-  Without the flag, GCC behaves as before.
-- GCC has no pipeline model for ARC EM, so it loads everything first and the multiplies wait on
-  the loads. `-mtune=arc700 -fschedule-insns` borrows the ARC700 model, which issues the
-  multiplies before the remaining loads. On the chip, per FFT:
-
-  | Build | Per FFT | Image (limit 3072 B) |
-  |---|---|---|
-  | stock GCC, butterflies in assembly (before) | 1.294 ms | 3032 B |
-  | patched GCC, assembly | 1.284 ms | 3036 B |
-  | patched GCC, assembly, ARC700 schedule | 1.271 ms | 3044 B |
-  | stock GCC, C butterflies, ARC700 schedule | 1.260 ms | 3084 B: doesn't fit |
-  | **patched GCC, C butterflies, ARC700 schedule** | **1.211 ms** | 3068 B |
-
-- An inline `asm` statement in a loop (e.g. an empty one to force an ordering) stops GCC from
-  using the zero-overhead `lp` loop.
-- A blob can only be loaded while no blob is active: writing PRAM over an active blob stalls the
-  chip (CMD −705). `set radio …` resets the chip first.
-- `-mno-sdata`: gp (r26) belongs to the ROM.
-- No libc or libgcc: stack arrays with initialisers become `memcpy` calls, and variable 64-bit
-  shifts become `__ashldi3`. Use `static const` tables and 32-bit halves.
-- `.bss` isn't uploaded: give globals an initial value in `.data`.
-- `bl` targets must be 4-byte aligned (`.align 4`): an unaligned target is silently rounded down.
-- Don't use fp as a scratch register with `enter_s [... fp ...]`: `leave_s` restores sp from it.
-- On the nRF52 side, SPI buffers must be in RAM (EasyDMA can't read flash): a `const` zero buffer
-  for a response frame sends garbage, and the chip's next command reports CMD_PERR.
-
-The console's `rc` prints `us=` (command time including BUSY), which is how the timings were
-measured.
+`firmware/pram/build.sh` (patched ARC GCC in Docker, see
+[lr2021-cpu.md](lr2021-cpu.md#toolchain)). The build fails if the image reaches the sweep buffer
+at 0x101C80 or if anything lands in `.bss`. `pram.bin` is checked in, so `tools/pram.py` works
+without Docker.

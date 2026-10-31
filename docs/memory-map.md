@@ -98,6 +98,8 @@ The full list of registers each command touches is in `analysis/register_fingerp
 
 ## CPU auxiliary registers (via 0x0103) [HW]
 
+What these mean for running code on the CPU: [lr2021-cpu.md](lr2021-cpu.md).
+
 | Aux | Value | Meaning |
 |---|---|---|
 | 0x04 IDENTITY | 0x46 | ARCv2 EM |
