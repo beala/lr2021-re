@@ -31,3 +31,8 @@ dut.log
 *.fifo
 caps/
 results/
+
+# PRAM blob build intermediates (sweep.bin is kept)
+firmware/pram/*.elf
+firmware/pram/*.lst
+firmware/pram/*.o
