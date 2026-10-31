@@ -14,26 +14,28 @@
         ; Results go into PRAM itself, after the code. 0x804000 is the packet engine's DMA target
         ; in LoRa RX, and CPU access to a DMA-owned bank stalls the chip. The host reads PRAM back
         ; at CPU 0x101000+ with ReadRegMem32.
-        .equ OUT_BUF,         0x101A00  ; after the code + FFT tables (build.sh checks the image fits)
-        .equ OUT_MAX,         768       ; up to 0x102000
+        .equ OUT_BUF,         0x101C00  ; after the code + FFT tables (build.sh checks the image fits)
+        .equ OUT_MAX,         512       ; up to 0x102000
 
+        .arc_attribute Tag_ARC_ABI_rf16, 1     ; 16-entry register file, matches fft.c (-mrf16)
         .section .text
         .global _start
 _start:
 header:
         .word   0x600DB002              ; magic checked by pram_check
-        .word   0x0000000A              ; low byte: 10 entries
+        .word   0x0000000B              ; low byte: 11 entries
 entries:
         .word   install                 ; 0
         .word   sweep                   ; 1
         .word   hello                   ; 2
-        .word   setfreq                 ; 3 (debug: one retune)
-        .word   rssi1                   ; 4 (debug: one RSSI read)
-        .word   storetest               ; 5 (debug: one store to OUT_BUF)
-        .word   onepoint                ; 6 (debug: one sweep iteration, no store)
+        .word   badcmd                  ; 3-6: retired debug entries (setfreq, rssi1, storetest, onepoint)
+        .word   badcmd
+        .word   badcmd
+        .word   badcmd
         .word   fft_cmd                 ; 7 (fft.c: averaged FFT of a raw capture)
         .word   capture_cmd             ; 8 (fft.c: capture driven from inside the command)
-        .word   capfft_cmd              ; 9 (fft.c: capture + FFT in one command)
+        .word   capfft_cmd              ; 9 (fft.c: capture + FFT + dB in one command)
+        .word   bench_cmd               ; 10 (fft.c: timing benchmark)
         .word   0
 
 ; ---------------------------------------------------------------- 0: install
@@ -63,89 +65,10 @@ hello:
         mov_s   r0, 3
         j_s     [blink]
 
-; ---------------------------------------------------------------- 3: setfreq (debug)
-; Params: be32 Hz. Calls the ROM SetRfFrequency handler once; returns 1 byte: its status.
-setfreq:
-        enter_s [r13, blink]
-        mov     r13, r2
-        mov_s   r0, 4
-        mov     r12, ROM_SET_RF_FREQ
-        jl      [r12]
-        ld_s    r3, [r13, 4]
-        stb_s   r0, [r3, 0]
-        mov_s   r12, 1
-        st_s    r12, [r13, 0]
-        mov_s   r0, 3
-        leave_s [r13, blink, pcl]
-
-; ---------------------------------------------------------------- 4: rssi1 (debug)
-; Returns 2 bytes: the raw 9-bit instant RSSI (big-endian).
-rssi1:
-        enter_s [r13, blink]
-        mov     r13, r2
-        mov     r12, ROM_RSSI_INST
-        jl      [r12]
-        ld_s    r3, [r13, 4]
-        lsr     r12, r0, 8
-        stb_s   r12, [r3, 0]
-        stb_s   r0, [r3, 1]
-        mov_s   r12, 2
-        st_s    r12, [r13, 0]
-        mov_s   r0, 3
-        leave_s [r13, blink, pcl]
-
-; ---------------------------------------------------------------- 5: storetest (debug)
-storetest:
-        mov     r12, OUT_BUF
-        mov     r3, 0x1234
-        sth     r3, [r12, 0]
-        ldh     r0, [r12, 0]
-        ld_s    r3, [r2, 4]
-        lsr     r12, r0, 8
-        stb_s   r12, [r3, 0]
-        stb_s   r0, [r3, 1]
-        mov_s   r12, 2
-        st_s    r12, [r2, 0]
-        mov_s   r0, 3
+; ---------------------------------------------------------------- unused slots
+badcmd:
+        mov_s   r0, 1
         j_s     [blink]
-
-; ---------------------------------------------------------------- 6: onepoint (debug)
-; Params: be32 Hz. Stack buffer -> ROM retune -> 200-loop dwell -> 4 RSSI reads summed.
-onepoint:
-        enter_s [r13-r14, blink]
-        sub_s   sp, sp, 8
-        mov     r13, r2
-        ldb_s   r12, [r1, 0]
-        stb     r12, [sp, 0]
-        ldb_s   r12, [r1, 1]
-        stb     r12, [sp, 1]
-        ldb_s   r12, [r1, 2]
-        stb     r12, [sp, 2]
-        ldb_s   r12, [r1, 3]
-        stb     r12, [sp, 3]
-        mov_s   r0, 4
-        mov_s   r1, sp
-        mov     r12, ROM_SET_RF_FREQ
-        jl      [r12]
-        mov     r12, 200
-5:      sub.f   r12, r12, 1
-        bnz     5b
-        mov     r14, 0
-        mov     r12, ROM_RSSI_INST
-        jl      [r12]
-        add     r14, r14, r0
-        mov     r12, ROM_RSSI_INST
-        jl      [r12]
-        add     r14, r14, r0
-        ld_s    r3, [r13, 4]
-        lsr     r12, r14, 8
-        stb_s   r12, [r3, 0]
-        stb_s   r14, [r3, 1]
-        mov_s   r12, 2
-        st_s    r12, [r13, 0]
-        mov_s   r0, 3
-        add_s   sp, sp, 8
-        leave_s [r13-r14, blink, pcl]
 
 ; ---------------------------------------------------------------- 1: sweep
 ; Params (big-endian): start Hz (4), step Hz (4, signed), n (2), dwell (2), avg (2).

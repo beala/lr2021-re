@@ -5,7 +5,8 @@
   python3 tools/pram.py [--port P] sweep START_MHZ STOP_MHZ STEP_KHZ [--dwell N] [--avg N] [--out file.csv] [--plot file.png]
   python3 tools/pram.py [--port P] fft [--frames N] [--check] [--plot file.png]   on-chip spectrum of the current channel
   python3 tools/pram.py [--port P] waterfall [--seconds S] [--nseg N] [--save f.npz] [--plot f.png]
-                                                         capture + FFT in one on-chip command per frame
+                                                         capture + FFT + dB on the chip, frames streamed by
+                                                         the console's wfrun (binary, no host round trips)
 
 The sweep keeps the radio in LoRa RX and retunes on the chip (ROM SetRfFrequency handler)
 between instant-RSSI readings; results come back through RAM 0x804000. Receive only.
@@ -26,9 +27,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_BLOB = os.path.join(HERE, '..', 'firmware', 'pram', 'pram.bin')
 PRAM_HOST = 0x801000      # write-only window into PRAM
 PRAM_CPU = 0x101000       # readable copy
-OUT_BUF = 0x101A00        # sweep results live in PRAM (0x804000 is DMA-owned during RX)
+OUT_BUF = 0x101C00        # sweep results live in PRAM (0x804000 is DMA-owned during RX)
 CAP_BUF = 0x804000        # raw capture (source 0, int8 I/Q)
-FFT_ACC = 0x805400        # 256 x u32 power sums written by the FFT command
+FFT_ACC = 0x805400        # entry 7: 256 x u64 power sums; entry 9: 256 x u8 half-dB
 CAP_WORDS = 1280          # 5 KB = 10 segments of 256 samples
 
 
@@ -129,7 +130,8 @@ def chip_fft(con, nseg=10, skip=0):
     if st != 0:
         raise RuntimeError(f'fft failed: st={st}')
     t1 = time.time()
-    acc = con.mr(FFT_ACC, 256)
+    w = con.mr(FFT_ACC, 512)                         # 256 x u64 (little-endian word pairs)
+    acc = [w[2 * k] | (w[2 * k + 1] << 32) for k in range(256)]
     return acc, t1 - t0, time.time() - t1
 
 
@@ -143,6 +145,53 @@ def host_fft(raw, nseg=10, skip=0):
     for s in range(skip, skip + nseg):
         acc += np.abs(np.fft.fft(z[s * 256:(s + 1) * 256] * win)) ** 2
     return acc
+
+
+def wf_stream(con, nseg, seconds):
+    """Run the console's wfrun for `seconds`; returns (rows of fftshifted dB, MCU times s, chip ms)."""
+    import numpy as np
+    s = con.s
+    s.reset_input_buffer()
+    s.write(f'wfrun {nseg} 0\r'.encode())
+    buf, end = b'', time.time() + 3
+    while b'WFBIN' not in buf and time.time() < end:
+        buf += s.read(4096)
+    if b'WFBIN' not in buf:
+        raise RuntimeError(f'wfrun did not start: {buf[-200:]!r}')
+    buf = buf[buf.index(b'\n', buf.index(b'WFBIN')) + 1:]
+    rows, times, chip = [], [], []
+    stop_at = time.time() + seconds
+    stopping = False
+    while True:
+        if not stopping and time.time() >= stop_at:
+            s.write(b'x'); stopping = True
+        buf += s.read(65536)
+        while len(buf) >= 268 and buf[0] == 0xA5 and buf[1] == 0x5A:
+            t_us, c_us = struct.unpack('<II', buf[4:12])
+            rows.append(np.fft.fftshift(np.frombuffer(buf[12:268], np.uint8).astype(float) / 2))   # dB
+            times.append(t_us / 1e6); chip.append(c_us / 1e3)
+            buf = buf[268:]
+        if (b'wfrun done' in buf and buf.endswith(b'\n')) or b'wfrun error' in buf:
+            if b'wfrun error' in buf:
+                raise RuntimeError(buf.decode(errors='replace'))
+            break
+        if buf and buf[0] != 0xA5:
+            tail = buf.lstrip()
+            # the end-of-stream text can arrive split across reads: wait while it's a prefix of it
+            if not (tail.startswith(b'wfrun') or b'wfrun'.startswith(tail[:5])):
+                raise RuntimeError(f'lost frame sync: {buf[:40]!r}')
+    # MCU micros() wraps every 2^32 us (~71.6 min): unwrap
+    out, prev, off = [], None, 0
+    for t in times:
+        if prev is not None and t < prev:
+            off += 2 ** 32 / 1e6
+        prev = t
+        out.append(t + off)
+    m = re.search(rb'wfrun done (\d+) chip_us (\d+) read_us (\d+) write_us (\d+)', buf)
+    if m:
+        print(f'MCU per frame: chip command {int(m[2]) / 1e3:.2f} ms, SPI readback {int(m[3]) / 1e3:.2f} ms, USB write {int(m[4]) / 1e3:.2f} ms')
+    t0 = out[0] if out else 0
+    return rows, [t - t0 for t in out], chip
 
 
 def main():
@@ -173,23 +222,16 @@ def main():
         con.cmd('hold on', 'hold st')
         con.rc(0x0128, 0, b'\0')
         con.rc(0x0207, 0, b'\x0b')                  # raw packet type, once
-        rows, times, chip_ms = [], [], []
-        t0 = time.time()
-        while time.time() - t0 < args.seconds:
-            out = con.cmd(f'rc 012D 4 09 {args.nseg:02X} 00', 'us=', 5)
-            m = re.search(r'rc st=(-?\d+)((?: [0-9A-F]{2})*) us=(\d+)', out)
-            if not m or m[1] != '0':
-                raise RuntimeError(f'capture+fft failed: {out!r}')
-            rows.append(np.fft.fftshift(np.array(con.mr(FFT_ACC, 256), float)))
-            times.append(time.time() - t0); chip_ms.append(int(m[3]) / 1000)
-        dt = times[-1] / max(len(times) - 1, 1)
-        print(f'{len(rows)} frames in {times[-1]:.1f} s = {1 / dt:.1f} frames/s; on-chip capture+FFT {np.median(chip_ms):.1f} ms per frame')
+        rows, times, chip_ms = wf_stream(con, args.nseg, args.seconds)
+        dt = (times[-1] - times[0]) / max(len(times) - 1, 1)
+        print(f'{len(rows)} frames in {times[-1] - times[0]:.2f} s = {1 / dt:.1f} frames/s; '
+              f'on-chip capture+FFT+dB {np.median(chip_ms):.2f} ms per frame (nseg {args.nseg})')
         freq = np.fft.fftshift(np.fft.fftfreq(256, 1 / 250e3))
         if args.save:
             np.savez(args.save, rows=np.array(rows), times=np.array(times), freq=freq)
         if args.plot:
             import matplotlib; matplotlib.use('Agg'); import matplotlib.pyplot as plt
-            db = 10 * np.log10(np.array(rows) + 1)
+            db = np.array(rows)
             plt.figure(figsize=(9, 6)); plt.pcolormesh(freq / 1e3, times, db, shading='nearest', cmap='Blues')
             plt.gca().invert_yaxis(); plt.xlabel('offset (kHz)'); plt.ylabel('time (s)'); plt.colorbar(label='dB')
             plt.tight_layout(); plt.savefig(args.plot, dpi=100)

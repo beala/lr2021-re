@@ -12,6 +12,7 @@
 //   loratx <hex>                    send one LoRa packet (explicit header, CRC on, 16-symbol preamble)
 //   rxstats                         hardware RX counters
 //   pinmon <ms> / pinsnap <n>       XIAO only: watch the pads wired to the MCU (docs/test-bus.md)
+//   wfrun <nseg> [frames]           stream the on-chip spectrum (PRAM entry 9) as binary frames until x
 //   help
 //
 // Receiver: while not held the chip receives LoRa with the current settings and prints one line
@@ -149,6 +150,103 @@ static void pinsnap(uint32_t n) {
 }
 #endif
 
+// wfrun <nseg> [frames]: repeat the PRAM capture + FFT + dB command (entry 9, firmware/pram; load it
+// with tools/pram.py) and stream binary frames, without host round trips. Prints "WFBIN <nseg>\n",
+// then per frame: A5 5A, seq (u16 LE), t_us (u32 LE, MCU time), chip_us (u32 LE, entry 9 runtime),
+// 256 x u8 half-dB (FFT order: bin 0 = DC, 128..255 negative). Stops on 'x' or after `frames`
+// (0 = until stopped), then prints "wfrun done <n>". Needs packet type 0x0B (the host sets it).
+struct HalAccess : public ArduinoHal {
+  using ArduinoHal::spiSettings;
+};
+
+// ReadRegMem32 on raw SPI at 16 MHz with one block transfer: RadioLib's memRead costs ~0.85 ms
+// per 32 words here, this ~0.1 ms. nwords <= 32. Words come big-endian off the wire;
+// out[] gets the bytes in memory order (byte at addr + k = out[k]).
+static uint8_t lastReadStat[4];   // status bytes of the last raw read (printed on errors)
+static bool fastMemRead(uint32_t addr, uint8_t* out, uint8_t nwords) {
+  static uint8_t rx[2 + 128];
+  // Response frame: clocked with 0x00 (NOP). The buffer must be in RAM, not const: the nRF52's
+  // SPIM EasyDMA can't read flash, so a const buffer sends nothing useful.
+  static uint8_t zeros[2 + 128];
+  uint8_t cmd[6] = { 0x01, 0x06, (uint8_t)(addr >> 16), (uint8_t)(addr >> 8), (uint8_t)addr, nwords };
+  SPISettings fast(16000000, MSBFIRST, SPI_MODE0);
+  for (int pass = 0; pass < 2; pass++) {
+    delayMicroseconds(2);  // BUSY rises a moment after NSS goes high: don't catch it still low
+    uint32_t t = micros();
+    while (digitalRead(P_LORA_BUSY)) if (micros() - t > 5000) return false;
+    SPI.beginTransaction(fast);
+    digitalWrite(P_LORA_NSS, LOW);
+    if (pass == 0) SPI.transfer(cmd, nullptr, sizeof(cmd));
+    else SPI.transfer(zeros, rx, 2 + 4 * nwords);
+    digitalWrite(P_LORA_NSS, HIGH);
+    SPI.endTransaction();
+  }
+  for (int i = 0; i < 4; i++) lastReadStat[i] = rx[i];
+  for (int i = 0; i < nwords; i++)
+    for (int b = 0; b < 4; b++) out[4 * i + b] = rx[2 + 4 * i + 3 - b];
+  return true;
+}
+
+// Read-type command on raw SPI (command frame, BUSY wait, response frame clocked with 0x00 from RAM).
+// Returns the command status (bits 3:1 of the first status byte; 3 = data) or -1 on a BUSY timeout.
+static int fastCmdRead(const uint8_t* cmd, size_t clen, uint8_t* out, size_t olen, uint32_t busyUs) {
+  static uint8_t tx[16], rx[2 + 16], zeros[2 + 16];
+  if (clen > sizeof(tx) || olen > 16) return -1;
+  memcpy(tx, cmd, clen);
+  SPISettings fast(16000000, MSBFIRST, SPI_MODE0);
+  for (int pass = 0; pass < 2; pass++) {
+    delayMicroseconds(2);
+    uint32_t t = micros();
+    while (digitalRead(P_LORA_BUSY)) if (micros() - t > busyUs) return -1;
+    SPI.beginTransaction(fast);
+    digitalWrite(P_LORA_NSS, LOW);
+    if (pass == 0) SPI.transfer(tx, nullptr, clen);
+    else SPI.transfer(zeros, rx, 2 + olen);
+    digitalWrite(P_LORA_NSS, HIGH);
+    SPI.endTransaction();
+  }
+  memcpy(out, rx + 2, olen);
+  return (rx[0] >> 1) & 7;
+}
+
+static void wfrun(uint32_t nseg, uint32_t frames) {
+  HalAccess* hal = static_cast<HalAccess*>(static_cast<ArduinoHal*>(radio.getMod()->hal));
+  SPISettings saved = hal->spiSettings;
+  hal->spiSettings = SPISettings(16000000, MSBFIRST, SPI_MODE0);
+  static uint8_t frame[4 + 4 + 4 + 256];
+  uint8_t params[2] = { 9, (uint8_t)nseg }, rsp[4];
+  Serial.printf("WFBIN %lu\n", (unsigned long)nseg);
+  uint32_t n = 0, sumChip = 0, sumRead = 0, sumWrite = 0;
+  while (frames == 0 || n < frames) {
+    if (Serial.available() && Serial.read() == 'x') break;
+    uint32_t t0 = micros();
+    uint8_t cmd[4] = { 0x01, 0x2D, params[0], params[1] };      // ActivatePram sub-command 9
+    int st = fastCmdRead(cmd, sizeof(cmd), rsp, 4, 200000);
+    uint32_t chip = micros() - t0;
+    if (st != 3 || rsp[1] == 0) {
+      Serial.printf("\nwfrun error status=%d seg=%u last read frame %02X %02X %02X %02X\n", st, rsp[1], lastReadStat[0], lastReadStat[1],
+                    lastReadStat[2], lastReadStat[3]);
+      break;
+    }
+    uint32_t t1 = micros();
+    if (!fastMemRead(0x805400, frame + 12, 32) || !fastMemRead(0x805480, frame + 140, 32)) {
+      Serial.println("\nwfrun error busy");
+      break;
+    }
+    uint32_t t2 = micros();
+    frame[0] = 0xA5; frame[1] = 0x5A; frame[2] = n; frame[3] = n >> 8;
+    memcpy(frame + 4, &t0, 4);
+    memcpy(frame + 8, &chip, 4);
+    Serial.write(frame, sizeof(frame));
+    sumChip += chip; sumRead += t2 - t1; sumWrite += micros() - t2;
+    n++;
+  }
+  hal->spiSettings = saved;
+  // averages per frame: chip command, SPI readback, USB write
+  Serial.printf("\nwfrun done %lu chip_us %lu read_us %lu write_us %lu\n", (unsigned long)n, (unsigned long)(n ? sumChip / n : 0),
+                (unsigned long)(n ? sumRead / n : 0), (unsigned long)(n ? sumWrite / n : 0));
+}
+
 static int hexval(char c) {
   if (c >= '0' && c <= '9') return c - '0';
   if (c >= 'a' && c <= 'f') return c - 'a' + 10;
@@ -218,6 +316,14 @@ static bool handleRadio(const char* cmd) {
     return true;
   }
 #endif
+  if (!strncmp(cmd, "wfrun ", 6)) {
+    char* q;
+    uint32_t nseg = strtoul(cmd + 6, &q, 0), frames = strtoul(q, NULL, 0);
+    if (nseg < 1 || nseg > 10) { Serial.println("  -> ERR nseg 1..10"); return true; }
+    stopRx();
+    wfrun(nseg, frames);
+    return true;
+  }
   if (!strcmp(cmd, "rxstats")) {
     Serial.printf("  -> > rx=%lu crc_err=%lu hdr_err=%lu tx=%lu\r\n", (unsigned long)rxOk, (unsigned long)rxCrc,
                   (unsigned long)rxHdr, (unsigned long)txCount);
