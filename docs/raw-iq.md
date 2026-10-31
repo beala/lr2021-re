@@ -90,6 +90,43 @@ At the 1000 kHz setting, source 4 fills 8 KB much faster and looks different: fl
 strong line at −0.083 × the sample rate, with no LoRa visible. Its rate and IF there weren't
 worked out. The ~330 kHz IF is for BW 62.5 kHz.
 
+### Image rejection [HW]
+
+The low IF (~330 kHz at BW 62.5 kHz) puts the image **about 660 kHz below** the RX frequency.
+It was measured on the XIAO at 908 MHz with source 2 (int16, after the channel filter) and the
+receive gain fixed at step 13 (`rc 021A 0 0D`) so the AGC couldn't skew the comparison:
+
+1. The other board sends a CW carrier at the wanted offset (+10 kHz) and the tone level is
+   measured.
+2. The same carrier at the image (−670 or −680 kHz, same drive) leaks in as a mirror tone at
+   +8.3 / +20.4 kHz. The mirror moves opposite to the carrier, which confirms it's the image
+   (and gives IF ≈ 330 kHz). An image at −660 kHz isn't usable: its mirror lands near DC.
+3. Image rejection = wanted tone − mirror tone, at the same drive and gain.
+
+| Condition | Image rejection |
+|---|---|
+| After normal start-up (RadioLib runs CalibFE at 908 MHz) | **33 dB** (32.0–34.6 over 5 runs) |
+| CalibFE again, run in LoRa packet type (standby RC / XOSC) | 34.2 / 31.5 dB: no improvement |
+| Calibrate with reserved bit 7 (0x80) or bit 4 (0x10) | accepted, no error, no measurable change |
+| **CalibFE run while in packet type 0x0B** | **24–25 dB, and the received level drops 18 dB** until the radio is re-initialised |
+
+For comparison, datasheet Rev 2.2 gives sub-GHz image attenuation of 35 dB typical without image
+calibration and 45 dB with it (BW < 500 kHz). The measured 33 dB is close to the uncalibrated
+figure even though CalibFE had run. In practice, a strong signal ~660 kHz below the channel
+leaks in about 33 dB down: a −60 dBm neighbour there is roughly a −93 dBm interferer.
+
+Notes:
+- **Don't run CalibFE (0x0123) in packet type 0x0B.** It miscalibrates the front end: −18 dB
+  of signal and worse image rejection, until the next full init. Switch to LoRa (`rc 0207 0 00`)
+  first.
+- Calibrate bits 4 and 7 (RFU) don't affect image rejection, so bit 7 isn't image calibration,
+  despite GetErrors bit 7 being called IMG_CALIB_ERR.
+- At the IF tap (source 5) the mirror is only a few dB above that source's noise floor, so it
+  only shows ≥ ~21 dB before the final mixer. That's not enough to say how much the digital
+  correction adds.
+- One chip, one frequency, maximum gain, CW tones, and the raw capture path. Whether the LoRa
+  demodulator path does better wasn't tested.
+
 Debug console: `cap <cfg> <words> <ms>` and `capwait <cfg> <ratio> <ms>`
 ([firmware/README.md](../firmware/README.md)).
 
