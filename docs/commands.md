@@ -42,7 +42,7 @@ Multi-byte parameters are big-endian. Handlers read them with `read_be24` (0x23B
 | 0x012B | 0x11564 | 12-way debug/test multiplexer. The first param byte selects the case: force IRQ bits (0xF2A008, masked by RAM 0x80060C), set that mask, DIO bits through 0xF2A004, and others | [RE] |
 | 0x012C | 0xF800 | **Program hardware actionpoints** (aux 0x220/0x221/0x222 + 3n = match/mask/control, n = 0..1), with exception handler 0x236C. This is a breakpoint / ROM-patch mechanism | [RE] |
 | 0x012D | 0x10AC4 | ActivatePram. RadioLib uses it; the datasheet doesn't list it. With extra params it **dispatches sub-commands into a PRAM-provided table** (pointer at RAM 0x8007F0, count at [0x8007F4]+4), so a PRAM blob can add its own commands | [RE] |
-| 0x012F | 0xE958 | Writes 0xF2F020 with a selector 0x00–0x5F. Selector 0xFF reconfigures pads (0xF24008 / 0xF02008). Looks like an internal test bus / signal mux, probably routable to DIOs | [guess] |
+| 0x012F | 0xE958 | **Internal test bus onto the pads.** Writes the selector to 0xF2F020 and sets pad mux 0xA on the pads in mask A (output/input enable from masks B/C). Selector 0xFF restores the pads. Without masks it takes over all 13 pads, SPI included. See [test-bus.md](test-bus.md) | [HW] |
 | 0x0134 / 0x0135 | 0x2D2C / 0x2D04 | Use the same frequency-list parser as CalibFE (`parse_freq_list`, 0x5B88), then run calibration 0x7114 with stored params (RAM 0x80064A / 0x800648). Touch 0xF30154 (AGC), 0xF40140/0xF40148 (synth) and 0xF40024. Probably other per-frequency calibrations | [RE] |
 | 0x0136 | 0x3284 | CalibFE (0x0123) with a leading **block-mask byte** (default 0x3F = all blocks) | [RE] |
 

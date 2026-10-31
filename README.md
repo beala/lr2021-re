@@ -74,6 +74,7 @@ which has no location set.
 | [docs/raw-iq.md](docs/raw-iq.md) | Hidden packet type 0x0B, 0x0290 capture, continuous IQ streaming, LRIQ wire format |
 | [docs/software-receiver.md](docs/software-receiver.md) | Software LoRa decoder, live sniffer, hardware-vs-software comparison, offline SIC |
 | [docs/rate-bench.md](docs/rate-bench.md) | Max LoRa/FLRC throughput, raw IQ TX/RX limits, 2 m APRS from the LR2021, reserved codes (SF0–4, ldro=2, packet type 0x01) |
+| [docs/test-bus.md](docs/test-bus.md) | Undocumented test bus on the DIO pads (0x012F): selector map, packet flags; DIO function codes |
 | [docs/dualband-bench.md](docs/dualband-bench.md) | 908 MHz / 2478 MHz dual-band CAD scanning: switch time, catch rates |
 | [firmware/README.md](firmware/README.md) | The test firmware: console (`mr`, `mw`, `rc`, `stream`, `iqstream`, LoRa RX/TX), benches, boards |
 
@@ -97,7 +98,7 @@ Data tables:
   - hardware actionpoints (0x012C);
   - a PRAM sub-command table (0x012D);
   - a raw capture DMA (0x0290–0x0294);
-  - test multiplexers (0x012B/0x012F);
+  - test multiplexers (0x012B, and 0x012F, which puts an internal test bus on the DIO pads);
   - lower-level packet-engine and AGC knobs.
 - **GetLoraPacketStatus returns 10 bytes, not 6.** Byte 9 is the AGC gain step (G1..G13)
   that the ROM latches during each packet. The current gain step is in 0xF30154[23:20].

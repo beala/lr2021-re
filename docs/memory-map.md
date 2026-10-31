@@ -89,7 +89,9 @@ PRAM is full: the 2240 B patch plus the 1840 B JLI table leave about 16 B free. 
 | 0xF2A004 | | DIO output bits (0x012B) | [RE] |
 | 0xF2A008 | | force IRQ bits (0x012B) | [RE] |
 | 0xF2A00C | | IRQ status (ClearIrq / GetAndClearIrqStatus) | [RE] |
-| 0xF2F020 | | test-bus selector 0x00–0x5F (0x012F) | [guess] |
+| 0xF2F020 | [15:8], [0] | test-bus selector, enable (0x012F, [test-bus.md](test-bus.md)) | [HW] |
+| 0xF02004 + 4·i | [1], [2], [5:4] | pad i (= DIOi, i = 0..12): output enable, input enable, pull | [RE] |
+| 0xF26004 + 4·i | [4:0] | pad i mux: 0 none/LF clk, 1 GPIO/RF switch, 0xA test bus, 0xB HF clk, 0x10 IRQ | [RE] |
 
 The full list of registers each command touches is in `analysis/register_fingerprints.txt`.
 
