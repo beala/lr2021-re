@@ -104,15 +104,19 @@ Per frame outside the chip: SPI readback 0.34 ms, USB 0.09 ms. Against numpy on 
 
 ![Live waterfall computed on the chip](figures/onchip_waterfall.png)
 
-A 20 s capture at 309 frames/s (`waterfall --nseg 1`): every spectrum was computed on the chip.
-The other board (lowest drive, dummy load) stepped a CW carrier through −40, −20, 0, +20 and
-+40 kHz, then sent LoRa SF7 and SF9 packets (62.5 kHz). Zoom B: SF7's 2 ms chirps are shorter than
-the 3.2 ms frame interval, so they smear. Zoom C: SF9's 8.2 ms chirps span 2–3 frames and show as
-a sawtooth. Also visible: the steady internal spur at −21 kHz and the ±50 kHz channel-filter
-edges.
+A 20 s capture at 462 frames/s (`waterfall --nseg 1 --overlap`, 9,273 spectra): every spectrum
+was computed on the chip. The other board (lowest drive, dummy load) stepped a CW carrier through
+−40, −20, 0, +20 and +40 kHz, then sent LoRa SF7 and SF9 packets (62.5 kHz).
+
+- Zoom B: a frame comes every 2.16 ms and an SF7 chirp every 2.05 ms. Each frame catches the
+  sweep 0.12 ms (3.5 kHz) further on, so the preamble's upchirps alias into slow slanted streaks,
+  a full sweep about every 40 ms.
+- Zoom C: each 8.2 ms SF9 chirp spans about 4 frames and shows as a staircase of ~16 kHz steps.
+- Also visible: the steady internal spur at −21 kHz and the ±50 kHz channel-filter edges.
 
 ```
-python3 tools/pram.py waterfall --seconds 20 --nseg 4 --save wf.npz --plot wf.png
+python3 tools/pram.py waterfall --seconds 20 --nseg 1 --overlap --save wf.npz --plot wf.png   # 464 frames/s
+python3 tools/pram.py waterfall --seconds 20 --nseg 4 --save wf.npz --plot wf.png             # 4 segments averaged
 python3 tools/pram.py fft --frames 5 --check --plot spectrum.png
 ```
 
