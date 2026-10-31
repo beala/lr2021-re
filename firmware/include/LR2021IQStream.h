@@ -161,7 +161,7 @@ struct Exporter {
   }
 };
 
-static void run(CustomLR2021& radio, Stream& out, uint32_t durationMs, uint32_t mhz, uint16_t dec, uint16_t bits = 8, uint32_t rate = 250000, uint16_t rxDelay = 0) {
+template <class R> static void run(R& radio, Stream& out, uint32_t durationMs, uint32_t mhz, uint16_t dec, uint16_t bits = 8, uint32_t rate = 250000, uint16_t rxDelay = 0) {
   if ((mhz != 8 && mhz != 16 && mhz != 32) || dec < 1 || dec > 8) {
     out.println("iqstream error: SPI must be 8/16/32 MHz (32 experimental); decimation must be 1..8");
     return;

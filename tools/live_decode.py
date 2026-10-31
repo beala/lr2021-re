@@ -1,5 +1,5 @@
 # Loop: arm an LR2021 triggered IQ capture, fetch it, software-dechirp, print one line per packet.
-# Needs the LR2021_DEBUG_CLI repeater firmware on the XIAO. Ctrl-C to stop; reboot the XIAO afterwards.
+# Needs the console firmware (firmware/src/console) on the XIAO. Ctrl-C to stop; "hold off" afterwards.
 # Usage: live_decode.py [--port /dev/ttyACM0] [--gain 0] [--diagnostics] [--save DIR]
 import argparse, os, sys, time, datetime
 import serial

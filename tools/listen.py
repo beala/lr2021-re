@@ -1,4 +1,5 @@
-# usage: [PORT=/dev/ttyACMx] listen.py <secs> [cmds...]   prints RXSTAT lines
+# usage: [PORT=/dev/ttyACMx] listen.py <secs> [cmds...]   prints RXSTAT lines (console firmware; it boots
+# held, so pass "hold off" or "set radio <MHz>,<BW>,<SF>,<CR>" to start the receiver)
 import serial, sys, time, os
 s=serial.Serial(os.environ.get('PORT','/dev/ttyACM0'),115200,timeout=0.2); time.sleep(0.3)
 for c in sys.argv[2:]: s.write((c+'\r').encode()); time.sleep(0.5)

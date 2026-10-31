@@ -4,11 +4,14 @@ import time
 import unittest
 
 from compare_rx import airtime, compare_packets, decode_capture
-from kiss_rx import KissParser, KissReceiver, encode_frame
+from hw_rx import HwReceiver, LineParser, parse_rxstat
+
+LINE = ('RXSTAT len=4 st=0 rssi=-92.5 snr=14.75 raw=11 04 3B 5C 5A 07 FF FE 50 0D gain=13 crc=1 '
+        'data=01C0DB00')
 
 
-class KissTests(unittest.TestCase):
-    def test_keepalive_is_control_only_and_does_not_transmit(self):
+class HwRxTests(unittest.TestCase):
+    def test_keepalive_never_transmits(self):
         class FakeSerial:
             def __init__(self):
                 self.writes = []
@@ -16,48 +19,51 @@ class KissTests(unittest.TestCase):
 
             def write(self, data):
                 self.writes.append(data)
-                self.replies.append(encode_frame(6, b'\x97'))
+                if data.strip():
+                    self.replies.append(b'  -> > 910.525,62.5,7,5\r\n')
 
             def read(self, n):
                 time.sleep(.002)
                 return self.replies.popleft() if self.replies else b''
 
         port = FakeSerial()
-        receiver = KissReceiver(port, lambda p: None)
+        receiver = HwReceiver(port, lambda p: None)
         receiver.start()
         try:
-            self.assertEqual(receiver.request(0x17, timeout=.2), b'')
+            self.assertIn('910.525', receiver.request('get radio', timeout=.2))
             time.sleep(.025)
         finally:
             receiver.close()
         self.assertGreaterEqual(len(port.writes), 2)
-        self.assertTrue(all(frame == encode_frame(6, b'\x17') for frame in port.writes))
+        self.assertTrue(all(w in (b'\r', b'get radio\r') for w in port.writes))
+        self.assertFalse(any(b'loratx' in w for w in port.writes))
 
-    def test_fragmented_escaped_frames_and_startup_noise(self):
-        parser = KissParser()
-        message = b'\x01\xc0\xdb\x00'
-        stream = b'boot text\r\n' + encode_frame(0, message) + encode_frame(6, b'\xf9\x08\xb0')
-        frames = []
-        for byte in stream:
-            frames += parser.feed(bytes([byte]))
-        self.assertEqual(frames, [b'\x00' + message, b'\x06\xf9\x08\xb0'])
+    def test_fragmented_lines_and_startup_noise(self):
+        parser = LineParser()
+        lines = []
+        for byte in b'# LR2021 console on X\r\n\r\n' + LINE.encode() + b'\r\n':
+            lines += parser.feed(bytes([byte]))
+        self.assertEqual(lines, ['# LR2021 console on X', LINE])
+        packet = parse_rxstat(lines[1])
+        self.assertEqual(packet['payload'], '01c0db00')
+        self.assertEqual((packet['rssi_dbm'], packet['snr_db'], packet['gain']), (-92.5, 14.75, 13))
 
-    def test_malformed_escape_recovers_at_next_boundary(self):
-        parser = KissParser()
-        self.assertEqual(parser.feed(b'\xc0\x00\xdb\x01garbage\xc0' + encode_frame(0, b'ok')),
-                         [b'\x00ok'])
-
-    def test_modem_metadata_attaches_to_correct_packet(self):
+    def test_crc_failures_are_counted_not_reported(self):
         received = []
-        receiver = KissReceiver(None, received.append)
-        receiver._frame(b'\x00first', 1)
-        receiver._frame(b'\x06\xf9\xfc\xa6', 1.01)
-        receiver._frame(b'\x00second', 2)
-        receiver._flush_packet()
-        self.assertEqual(received[0]['snr_db'], -1)
-        self.assertEqual(received[0]['rssi_dbm'], -90)
-        self.assertEqual(received[1]['payload'], b'second'.hex())
-        self.assertNotIn('rssi_dbm', received[1])
+        receiver = HwReceiver(None, received.append)
+        receiver._line(LINE.replace('crc=1', 'crc=0'), 1)
+        receiver._line(LINE, 2)
+        self.assertEqual(receiver.crc_errors, 1)
+        self.assertEqual(len(received), 1)
+        self.assertEqual(received[0]['t'], 2)
+        self.assertTrue(received[0]['crc_ok'])
+
+    def test_replies_are_separated_from_packets(self):
+        receiver = HwReceiver(None, lambda p: None)
+        receiver._line('  -> > rx=3 crc_err=1 hdr_err=2 tx=0', 1)
+        receiver._line('hold st=0 on', 1)
+        receiver._line(LINE, 1)
+        self.assertEqual(list(receiver.replies), ['  -> > rx=3 crc_err=1 hdr_err=2 tx=0', 'hold st=0 on'])
 
 
 class ComparisonTests(unittest.TestCase):

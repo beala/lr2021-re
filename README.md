@@ -15,8 +15,9 @@ It also includes a software LoRa receiver and MeshCore packet decoder that run o
 streamed out of the chip.
 
 The work was done on two boards: an nRF52840 (Seeed XIAO) with a Seeed Wio-LR2021 module,
-and a RAK3401 carrier with a NiceRF LoRa2021F33-2G4 module. The firmware side runs as a
-debug console in [MeshCore](https://github.com/meshcore-dev/MeshCore).
+and a RAK3401 carrier with a NiceRF LoRa2021F33-2G4 module. The test firmware in `firmware/` is
+a standalone PlatformIO project (Arduino core + RadioLib): a debug console, a bit-rate bench and
+a dual-band bench.
 
 ## Credit
 
@@ -72,7 +73,9 @@ which has no location set.
 | [docs/agc-gain.md](docs/agc-gain.md) | AGC gain register, per-packet gain in GetLoraPacketStatus byte 9 |
 | [docs/raw-iq.md](docs/raw-iq.md) | Hidden packet type 0x0B, 0x0290 capture, continuous IQ streaming, LRIQ wire format |
 | [docs/software-receiver.md](docs/software-receiver.md) | Software LoRa decoder, live sniffer, hardware-vs-software comparison, offline SIC |
-| [firmware/README.md](firmware/README.md) | The MeshCore debug console (`mr`, `mw`, `rc`, `stream`, `iqstream`, ...) |
+| [docs/rate-bench.md](docs/rate-bench.md) | Max LoRa/FLRC throughput, raw IQ TX/RX limits, 2 m APRS from the LR2021, reserved codes (SF0–4, ldro=2, packet type 0x01) |
+| [docs/dualband-bench.md](docs/dualband-bench.md) | 908 MHz / 2478 MHz dual-band CAD scanning: switch time, catch rates |
+| [firmware/README.md](firmware/README.md) | The test firmware: console (`mr`, `mw`, `rc`, `stream`, `iqstream`, LoRa RX/TX), benches, boards |
 
 Data tables:
 
@@ -102,6 +105,14 @@ Data tables:
   entries in a RAM copy of the ROM's 460-entry JLI jump table.
 - Hidden packet type 0x0B is a raw mode. Together with 0x0290 it streams int8 IQ at
   250 kS/s through the RX FIFO, and the hardware AGC still works in this mode.
+- **Reserved datasheet values that do something** ([docs/rate-bench.md](docs/rate-bench.md)):
+  - LoRa `ldro = 2` is a stronger LDRO: SF−3 bits per chirp, and it receives;
+  - SF1–4 send SF12-length chirps carrying 1–4 bits each;
+  - SF0 sends a preamble with no payload;
+  - LoRa bandwidth codes 0x0/0x1/0x8/0x9 are the narrow SX127x bandwidths (7.8–20.8 kHz);
+  - packet type 0x01 is an empty slot that reuses the previous modem's setup.
+- Measured maxima: LoRa SF5/1000 kHz delivers 118 kbps, FLRC 2.08 Mbps. The chip's raw IQ TX
+  path can transmit 2 m APRS that a Kenwood handheld decodes.
 
 ## Quick start
 
@@ -113,9 +124,10 @@ python3 tools/lora_decode.py captures/iter/c02.bin 83333.333
 python3 tools/sic_demo.py --out /tmp/sic_demo              # offline collision cancellation demo
 ```
 
-Hardware tools need the debug firmware (see [firmware/README.md](firmware/README.md)):
+Hardware tools need the console firmware (see [firmware/README.md](firmware/README.md)):
 
 ```bash
+cd firmware && pio run -e xiao_console -t upload --upload-port /dev/ttyACM0 && cd ..
 python3 tools/sc.py -p /dev/ttyACM0 "mr F30154 1" "rc 22A 10"      # read gain reg, raw packet status
 python3 -u tools/continuous_capture.py --seconds 0 --decode       # live MeshCore sniffer from raw IQ
 ```
@@ -126,7 +138,8 @@ python3 -u tools/continuous_capture.py --seconds 0 --decode       # live MeshCor
 docs/        write-ups (see table above)
 analysis/    opcode table, register fingerprints, JLI map, measurement JSON, SIC demo outputs
 tools/       host tools: dump/disasm helpers, serial CLI, IQ capture, decoders, SIC, tests
-firmware/    MeshCore debug console sources (LR2021DebugCLI.h, LR2021IQStream.h)
+tools/bench/ bench drivers: serial logger, link/capture scripts, APRS encoder/decoder
+firmware/    standalone test firmware (PlatformIO): console, rate_bench, dualband_bench
 docker/      ARC binutils image for disassembly
 captures/    IQ test vectors (own node only) used by the tests
 logs/        gain sweep register dumps, RXSTAT logs

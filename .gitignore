@@ -20,3 +20,14 @@ analysis/sic_single/
 
 __pycache__/
 *.pyc
+
+# PlatformIO build output
+firmware/.pio/
+
+# bench run output (tools/bench scripts write logs/FIFOs/captures into the working directory)
+tx.log
+rx.log
+dut.log
+*.fifo
+caps/
+results/

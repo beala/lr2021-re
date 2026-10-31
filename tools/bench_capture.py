@@ -1,6 +1,7 @@
-"""Capture a low-power RAK zero-hop advert with the LR2021 debug receiver.
+"""Capture a low-power test advert from the RAK3401 board with the XIAO's raw IQ receiver.
 
-Stops normal mesh processing on the LR2021; reboot that receiver afterwards.
+Both boards run the console firmware. The RAK board replays a test advert (tools/bench_packet.py)
+on the test channel (default 908 MHz).
 The 3.4-second window retains the scheduled packet even if the power trigger fails.
 """
 import argparse
@@ -15,6 +16,7 @@ from live_decode import one_capture
 from lora_decode import decode, load_iq8, DecodeError
 from meshcore_decode import summarize_packet
 from radio_ports import default_port
+from bench_packet import TEST_FREQ_MHZ, setup_pair, send_advert
 
 
 def command(port, text):
@@ -31,6 +33,7 @@ def main():
     ap.add_argument('--rx', default=default_port('XIAO', '/dev/ttyACM0'))
     ap.add_argument('--tx', default=default_port('RAK3401', '/dev/ttyACM1'))
     ap.add_argument('--power', type=int, default=-9)
+    ap.add_argument('--freq', type=float, default=TEST_FREQ_MHZ, help='test channel, MHz')
     ap.add_argument('--gain', type=int, choices=range(14), default=None,
                     help='LR2021 gain 0=auto, 1..13=manual')
     ap.add_argument('--ratio', type=int, default=3)
@@ -41,17 +44,15 @@ def main():
     directory.mkdir(parents=True, exist_ok=True)
     with serial.Serial(args.rx, 115200, timeout=.2, exclusive=True) as rx, \
             serial.Serial(args.tx, 115200, timeout=.2, exclusive=True) as tx:
+        setup_pair(command, rx, tx, args.freq)
         command(tx, f'set tx {args.power}')
-        command(tx, 'get tx')  # Firmware prints negative int8 values as unsigned (247 = -9).
-        command(rx, 'hold on')
+        command(tx, 'get tx')
         if args.gain is not None:
             command(rx, f'rc 021A 0 {args.gain:02X}')
         for _ in range(args.count):
             def transmit():
                 time.sleep(1.2)
-                reply = command(tx, 'advert.zerohop')
-                if 'OK' not in reply:
-                    raise RuntimeError(f'RAK did not acknowledge zero-hop advert: {reply}')
+                send_advert(command, tx)
             with ThreadPoolExecutor(max_workers=1) as pool:
                 sent = pool.submit(transmit)
                 summary, data = one_capture(rx, f'stream 0 {args.ratio} 3400 8 8 3', 3.4)

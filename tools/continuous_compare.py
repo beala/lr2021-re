@@ -1,6 +1,7 @@
-"""Receive-only comparison: continuous LR2021 IQ/decoder versus RAK KISS modem.
+"""Receive-only comparison: continuous LR2021 IQ/decoder versus a hardware LoRa receiver.
 
-Requires iqstream firmware on the XIAO and KISS firmware on the RAK. The
+Both boards run the console firmware: the XIAO streams IQ, the RAK3401 board receives with the
+LR2021's LoRa modem (tools/hw_rx.py). The
 comparison uses approximate host timing with a 30 ms guard / 50 ms match limit.
 """
 import argparse
@@ -11,7 +12,7 @@ import time
 import serial
 from compare_rx import compare_packets, print_summary
 from continuous_capture import main as capture
-from kiss_rx import KissReceiver
+from hw_rx import HwReceiver
 from live_decode import read_until
 from radio_ports import default_port
 
@@ -40,7 +41,7 @@ def main():
             raise RuntimeError('continuous comparison currently requires SF7/BW62.5')
     packets = []
     with serial.Serial(args.rak, 115200, timeout=.005, exclusive=True) as port:
-        rak = KissReceiver(port, packets.append)
+        rak = HwReceiver(port, packets.append)
         rak.start()
         try:
             rak.configure(frequency, bw, sf, cr)

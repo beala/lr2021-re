@@ -1,7 +1,7 @@
 """Record checked continuous LR2021 IQ. Requires iqstream debug firmware.
 
 Native USB CDC; the baud setting is not a UART throughput limit. Ctrl-C requests
-a clean stop. The receiver stays held in raw mode afterwards; reboot to resume MeshCore.
+a clean stop. The receiver stays held afterwards; "hold off" re-initialises it (console firmware).
 """
 import argparse
 from datetime import datetime, timezone

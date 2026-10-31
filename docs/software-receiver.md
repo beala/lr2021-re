@@ -56,15 +56,19 @@ python3 -u tools/live_decode.py --diagnostics --save captures/live
 ```
 
 Boards are autodetected by USB description (`tools/radio_ports.py`); use `--port` to
-override. Capture mode leaves the MeshCore loop held, so reboot the receiver afterwards.
+override. The console firmware boots with its receiver held; capture commands leave it held,
+and `hold off` re-initialises the radio (no reboot needed).
 
 ## Hardware vs software comparison
 
 `tools/continuous_compare.py --seconds 600` listens with the LR2021 software receiver and a
-RAK3401 running MeshCore's `kiss_modem` firmware (SX1262 hardware modem) at the same time.
-Both radios only listen. The host sends KISS control frames only; `tools/kiss_rx.py` is a
-receive-only KISS host. Packets are matched one-to-one by exact bytes and receive time
-(50 ms tolerance).
+hardware LoRa receiver at the same time, and matches packets one-to-one by exact bytes and
+receive time (50 ms tolerance). Both radios only listen.
+
+The results below were measured with a RAK3401 running MeshCore's `kiss_modem` firmware
+(SX1262 hardware modem) as the reference. The tools now use a second board running this repo's
+console firmware instead: its LR2021 receives with its own LoRa modem and prints an `RXSTAT`
+line per packet, read by the receive-only host `tools/hw_rx.py`.
 
 Results are **conditional relative miss fractions**, not absolute PER, because packets that
 both receivers miss are invisible. RAK-only packets only count as software misses when their
@@ -78,8 +82,8 @@ whole airtime lies inside retained IQ.
 These are small samples, not a sensitivity ranking.
 
 A note on nRF52 USB: without host traffic, received frames could stay buffered in the
-device until the next host command. The tools send periodic ignored newlines (LR2021) and
-KISS pings (RAK) to keep the output flowing.
+device until the next host command. The tools send periodic ignored newlines to keep the
+output flowing.
 
 ## Offline collision cancellation (SIC): `tools/lora_sic.py`
 
@@ -125,5 +129,6 @@ batch-scans a capture tree.
 - `tools/stream_shot.py`: one triggered snapshot with `stream` + `streamdump`.
 - `tools/spectro_bin.py`, `spectro_zoom.py`: spectrograms of int8 IQ files
   (`captures/stream_rak3.png`, `_zoom.png`).
-- `tools/agc_sweep.py`, `bench_capture.py`: two-radio bench sweeps. A RAK repeater sends
-  zero-hop adverts while the LR2021 captures.
+- `tools/agc_sweep.py`, `bench_capture.py`: two-radio bench sweeps. The RAK3401 board
+  (console firmware) replays a test advert from the author's node (`tools/bench_packet.py`)
+  on 908 MHz while the XIAO captures.

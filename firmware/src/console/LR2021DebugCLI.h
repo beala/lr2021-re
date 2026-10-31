@@ -1,7 +1,7 @@
 #pragma once
 
-// Debug serial commands for poking at LR2021 chip memory (ROM dump / AGC research).
-// Enabled with -D LR2021_DEBUG_CLI. Not for production builds.
+// Debug serial commands for poking at LR2021 chip memory (ROM dump / AGC research, raw IQ).
+// Used by the console program (main.cpp). Some commands overwrite chip RAM.
 //
 //   mr <addr> [words]          read words (hex addr), 8 per line
 //   mw <addr> <value>          write one word
@@ -14,17 +14,17 @@
 //                              Auto-gain reductions also trigger. x=0 disables triggering (timed capture).
 //   streamstats                last capture's block power, actual/manual gain, raw int8 rail counts
 //   iqstream <ms> [mhz] [dec] [bits] [rawrate] [rxdelay]   continuous LRIQ binary stream; 0 ms=until ETX (0x03).
-//                              Default 16 MHz / decimation 3; leaves normal mesh held afterwards.
+//                              Default 16 MHz / decimation 3; leaves the receiver held afterwards.
 //   capwait <cfg> <x> <ms>     repeat one-shot raw captures (packet type 0x0B must be set) until the
 //                              capture power is > x times the first capture's power, then dump it.
-//   hold on|off                stop/resume the mesh loop (no radio access from MeshCore)
+//   hold on|off                stop/resume the console's hardware LoRa receiver (no other radio access)
 //   cap <cfg> <words> <ms> [trig]  RX capture via undocumented 0x0290 into RAM 0x804000:
 //                              cfg = size(7:5)|mode(4:3)|src(2:0) byte, e.g. D0 = size 6, mode 2, src 0.
 //                              Fills the buffer with A5A5A5A5, configures, enters RX (arms it), polls the write pointer (0x0291) for <ms>, stops the capture
 //                              (0x0290 mode 0 gives the RAM bank back to the CPU), then dumps <words>.
 
 #include <Arduino.h>
-#include "CustomLR2021.h"
+#include <LR2021Board.h>
 #include <SPI.h>
 
 namespace lr2021dbg {
@@ -46,7 +46,7 @@ static void printHex32(Stream& out, uint32_t v) {
 }
 
 // Read n words at addr in chunks of up to 32, print "AAAAAA: w0 w1 ..." lines of 8.
-static void dump(CustomLR2021& r, Stream& out, uint32_t addr, uint32_t n) {
+static void dump(LR2021Dev& r, Stream& out, uint32_t addr, uint32_t n) {
   uint32_t buf[32];
   while (n > 0) {
     uint8_t chunk = n > 32 ? 32 : n;
@@ -95,7 +95,7 @@ static void readFifo(uint8_t* data, size_t n) {
 
 #include "LR2021IQStream.h"
 
-static bool handle(CustomLR2021& r, const char* cmd, Stream& out) {
+static bool handle(LR2021Dev& r, const char* cmd, Stream& out) {
   if (strncmp(cmd, "iqstream ", 9) == 0) {
     char* p;
     uint32_t ms = strtoul(cmd + 9, &p, 0);

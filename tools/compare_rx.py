@@ -1,6 +1,8 @@
-"""Compare the LR2021 software decoder with the RAK hardware LoRa modem over KISS.
+"""Compare the LR2021 software decoder with a hardware LoRa receiver.
 
-Receive-only: no KISS DATA frames or RF transmissions are sent. Results are
+Both boards run the console firmware (firmware/src/console). The XIAO captures raw IQ for the
+software decoder; the RAK3401 board receives the same channel with the LR2021's own LoRa modem
+(tools/hw_rx.py). Receive-only: neither board transmits. Results are
 relative reception measurements, not absolute PER (transmissions missed by both
 receivers are unknown). Stop other readers of both serial ports before running.
 """
@@ -16,7 +18,7 @@ import time
 
 import numpy as np
 import serial
-from kiss_rx import KissReceiver
+from hw_rx import HwReceiver
 from live_decode import one_capture, read_until
 from lora_decode import decode, DecodeError
 from radio_ports import default_port
@@ -148,7 +150,7 @@ def summarize(events):
         result['rak_hardware_counter_delta'] = delta
         denominator = delta['rx'] + delta['read_errors']
         result['rak_detected_read_error_fraction'] = (delta['read_errors'] / denominator if denominator else None)
-        result['rak_counter_note'] = 'Read errors are not a count of all missed transmissions or exclusively CRC failures.'
+        result['rak_counter_note'] = 'Read errors (CRC + header errors) are not a count of all missed transmissions.'
     return result
 
 
@@ -205,17 +207,20 @@ def main():
         record(dict(kind='settings', utc=datetime.now(timezone.utc).isoformat(),
                     sf=args.sf, bw=args.bw, cr=args.cr, frequency_hz=args.freq,
                     gain=args.gain, guard_s=args.guard_ms / 1000, match_s=args.match_ms / 1000,
-                    kiss_keepalive_ms=10, kiss_read_timeout_ms=5))
+                    ref_keepalive_ms=10, ref_read_timeout_ms=5))
         with serial.Serial(args.rx, 115200, timeout=.2, exclusive=True) as rx, \
                 serial.Serial(args.rak, 115200, timeout=.005, exclusive=True) as rak_port:
             def got_rak(packet):
                 record(dict(packet, kind='rak'))
                 print(f"RAK RX {len(packet['payload']) // 2}B RSSI={packet.get('rssi_dbm')} SNR={packet.get('snr_db')}", flush=True)
 
-            rak = KissReceiver(rak_port, got_rak)
+            rak = HwReceiver(rak_port, got_rak)
             rak.start()
             try:
                 rak.configure(args.freq, args.bw, args.sf, args.cr)
+                rx.write(f'set radio {args.freq / 1e6:.6f},{args.bw / 1e3:g},{args.sf},{args.cr}\r'.encode())
+                if b'  -> OK' not in read_until(rx, b'  -> OK', 5):
+                    raise RuntimeError('LR2021 radio configuration failed')
                 rx.write(b'hold on\r')
                 if b'hold st=0 on' not in read_until(rx, b'hold st=0 on', 3):
                     raise RuntimeError('LR2021 did not enter hold mode')
@@ -237,7 +242,7 @@ def main():
                     try:
                         while time.monotonic() - begin < args.seconds:
                             if rak.error:
-                                raise RuntimeError(f'KISS receiver stopped: {rak.error}')
+                                raise RuntimeError(f'reference receiver stopped: {rak.error}')
                             timing = {}
                             summary, data = one_capture(rx, f'stream 0 3 {int(args.window * 1000)} 8 8 3', args.window, timing)
                             if not data:

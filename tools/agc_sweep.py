@@ -1,6 +1,6 @@
-"""Compare LR2021 raw-mode gain at different RAK powers using zero-hop adverts.
+"""Compare LR2021 raw-mode gain at different RAK3401-board powers using a replayed test advert.
 
-Requires debug firmware; streamstats adds gain/clip telemetry when supported.
+Both boards run the console firmware (tools/bench_packet.py, default 908 MHz).
 Restores RAK power to -9 dBm and leaves the receiver held with hardware AGC enabled.
 """
 import argparse
@@ -16,6 +16,7 @@ from bench_capture import command
 from live_decode import one_capture, read_until
 from lora_decode import decode, load_iq8, DecodeError
 from radio_ports import default_port
+from bench_packet import TEST_FREQ_MHZ, setup_pair, send_advert
 
 
 def main():
@@ -25,6 +26,7 @@ def main():
     ap.add_argument('--count', type=int, default=1)
     ap.add_argument('--ratio', type=int, default=0, help='0=timed capture; 3=test normal triggering')
     ap.add_argument('--save', default='captures/agc')
+    ap.add_argument('--freq', type=float, default=TEST_FREQ_MHZ, help='test channel, MHz')
     args = ap.parse_args()
     if any(g not in range(14) for g in args.gains):
         ap.error('gains must be 0..13')
@@ -35,7 +37,7 @@ def main():
     results = []
     with serial.Serial(default_port('XIAO', '/dev/ttyACM0'), 115200, timeout=.2, exclusive=True) as rx, \
             serial.Serial(default_port('RAK3401', '/dev/ttyACM1'), 115200, timeout=.2, exclusive=True) as tx:
-        command(rx, 'hold on')
+        setup_pair(command, rx, tx, args.freq)
         try:
             for power in args.powers:
                 command(tx, f'set tx {power}')
@@ -44,9 +46,7 @@ def main():
                     for attempt in range(args.count):
                         def transmit():
                             time.sleep(1.2)
-                            reply = command(tx, 'advert.zerohop')
-                            if 'OK - zerohop' not in reply:
-                                raise RuntimeError(f'transmit failed: {reply}')
+                            send_advert(command, tx)
                         start = time.monotonic()
                         with ThreadPoolExecutor(max_workers=1) as pool:
                             sent = pool.submit(transmit)

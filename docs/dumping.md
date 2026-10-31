@@ -47,8 +47,8 @@ the ROM. See [memory-map.md](memory-map.md).
 
 ## 2. The dump
 
-With the debug firmware ([firmware/README.md](../firmware/README.md)) on the board, open the
-MeshCore repeater serial console and run:
+With the console firmware ([firmware/README.md](../firmware/README.md)) on the board, open its
+serial port (115200) and run:
 
 ```
 mr 0 32768
