@@ -106,6 +106,9 @@ Data tables:
   entries in a RAM copy of the ROM's 460-entry JLI jump table.
 - Hidden packet type 0x0B is a raw mode. Together with 0x0290 it streams int8 IQ at
   250 kS/s through the RX FIFO, and the hardware AGC still works in this mode.
+- 0x0290 has seven capture sources: int8 and int16 IQ after the channel filter, int16 before
+  it, and two ~8 MS/s 11-bit IQ taps, one at baseband and one at the ~330 kHz low IF
+  ([raw-iq.md](docs/raw-iq.md)).
 - **Reserved datasheet values that do something** ([docs/rate-bench.md](docs/rate-bench.md)):
   - LoRa `ldro = 2` is a stronger LDRO: SF−3 bits per chirp, and it receives;
   - SF1–4 send SF12-length chirps carrying 1–4 bits each;

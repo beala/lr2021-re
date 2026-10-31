@@ -52,8 +52,30 @@ ReadRegMem32 0x804000 ...
 Source 0 is **interleaved int8 I, int8 Q at 250 kS/s** (4 × the 62.5 kHz LoRa bandwidth),
 so 8 KB = 4096 samples = 16.4 ms. The channel filter edge is visible at about ±50 kHz.
 This was verified with LoRa preamble upchirps: a -31..+31 kHz sweep with a 2.05 ms period
-(SF7 at 62.5 kHz = 2.048 ms). Sources 1–6 have 2,2,4,4,4,4,2 bytes per sample (ROM table
-0x13948) and haven't been explored. Source 2 hung the chip once in LoRa packet type.
+(SF7 at 62.5 kHz = 2.048 ms). Source 2 hung the chip once in LoRa packet type; in packet type
+0x0B every source captured cleanly.
+
+### All capture sources [HW]
+
+Sources 0–6 have 2, 2, 4, 4, 4, 4, 2 bytes per sample (ROM table 0x13948). Each was captured
+one-shot (8 KB, cfg `0xD0 | src`, packet type 0x0B) on the XIAO at 908 MHz, LoRa BW 62.5 kHz,
+with no signal and with a CW carrier from the other board at −50, +10, +50 and +100 kHz offsets.
+The rate comes from the 0x0291 write pointer and from where the carrier lands.
+
+| Src | Format | Rate | Signal | Notes |
+|---|---|---|---|---|
+| 0 | int8 I, int8 Q | 250 kS/s | complex baseband after the channel filter (−3 dB ≈ ±35–40 kHz, −20 dB by 60 kHz) | the source used for streaming |
+| 1 | int8 I, int8 Q | 250 kS/s | same filter and level as source 0 | a different tap at the same scale; not told apart yet |
+| 2 | int16 I, int16 Q (LE) | 250 kS/s | same filter, deeper stopband (≈ −34 dB) | the IQ16 transport |
+| 3 | int16 I, int16 Q (LE) | 250 kS/s | **before the final channel filter**: flat to ~60 kHz, −9 dB at 80 kHz, −17 dB at 120 kHz | ~2× source 2's level |
+| 4 | 11-bit I, Q, left-aligned in int16 (LE) | **~8 MS/s** | **wideband complex baseband**: the carrier lands at its offset (+50 kHz → +50 kHz) | residual line at ±330 kHz (IF leakage) |
+| 5 | 11-bit I, Q, left-aligned in int16 (LE) | **~8 MS/s** | **low-IF signal before the final mixer**: a carrier at offset *f* appears at ≈ 330 kHz + *f* | strong fixed lines with no signal |
+| 6 | int8 I, int8 Q | 250 kS/s | same filter as source 0, **4× the amplitude** (+12 dB) | a tap before a ÷4 scaling, or after extra gain |
+
+Sources 4 and 5 run at about 8 MS/s (probably 32 MHz / 4) even with a narrow LoRa bandwidth,
+so one 8 KB capture is a 256 µs, ±4 MHz-wide snapshot. That's too fast to stream over SPI,
+but useful as a spectrum snapshot around the RX frequency. Their rate at other LoRa bandwidths
+wasn't measured. The ~330 kHz IF is for BW 62.5 kHz.
 
 Debug console: `cap <cfg> <words> <ms>` and `capwait <cfg> <ratio> <ms>`
 ([firmware/README.md](../firmware/README.md)).
