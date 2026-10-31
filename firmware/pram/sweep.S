@@ -22,7 +22,7 @@
 _start:
 header:
         .word   0x600DB002              ; magic checked by pram_check
-        .word   0x00000008              ; low byte: 8 entries
+        .word   0x0000000A              ; low byte: 10 entries
 entries:
         .word   install                 ; 0
         .word   sweep                   ; 1
@@ -32,6 +32,8 @@ entries:
         .word   storetest               ; 5 (debug: one store to OUT_BUF)
         .word   onepoint                ; 6 (debug: one sweep iteration, no store)
         .word   fft_cmd                 ; 7 (fft.c: averaged FFT of a raw capture)
+        .word   capture_cmd             ; 8 (fft.c: capture driven from inside the command)
+        .word   capfft_cmd              ; 9 (fft.c: capture + FFT in one command)
         .word   0
 
 ; ---------------------------------------------------------------- 0: install

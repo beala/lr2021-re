@@ -4,6 +4,8 @@
   python3 tools/pram.py [--port P] hello
   python3 tools/pram.py [--port P] sweep START_MHZ STOP_MHZ STEP_KHZ [--dwell N] [--avg N] [--out file.csv] [--plot file.png]
   python3 tools/pram.py [--port P] fft [--frames N] [--check] [--plot file.png]   on-chip spectrum of the current channel
+  python3 tools/pram.py [--port P] waterfall [--seconds S] [--nseg N] [--save f.npz] [--plot f.png]
+                                                         capture + FFT in one on-chip command per frame
 
 The sweep keeps the radio in LoRa RX and retunes on the chip (ROM SetRfFrequency handler)
 between instant-RSSI readings; results come back through RAM 0x804000. Receive only.
@@ -154,6 +156,10 @@ def main():
     p.add_argument('--dwell', type=int, default=1000, help='settle time after each retune, x16 loop iterations (1000 ~ 1.4 ms)')
     p.add_argument('--avg', type=int, default=4, help='RSSI readings summed per point')
     p.add_argument('--out'); p.add_argument('--plot')
+    p = sub.add_parser('waterfall')
+    p.add_argument('--seconds', type=float, default=10)
+    p.add_argument('--nseg', type=int, default=10, help='256-sample segments averaged per frame (1..10)')
+    p.add_argument('--save'); p.add_argument('--plot')
     p = sub.add_parser('fft')
     p.add_argument('--frames', type=int, default=1)
     p.add_argument('--check', action='store_true', help='also read the raw capture and compare with numpy')
@@ -162,6 +168,32 @@ def main():
     con = Console(args.port)
     if args.what == 'load':
         sys.exit(0 if load(con, args.blob) else 1)
+    if args.what == 'waterfall':
+        import numpy as np
+        con.cmd('hold on', 'hold st')
+        con.rc(0x0128, 0, b'\0')
+        con.rc(0x0207, 0, b'\x0b')                  # raw packet type, once
+        rows, times, chip_ms = [], [], []
+        t0 = time.time()
+        while time.time() - t0 < args.seconds:
+            out = con.cmd(f'rc 012D 4 09 {args.nseg:02X} 00', 'us=', 5)
+            m = re.search(r'rc st=(-?\d+)((?: [0-9A-F]{2})*) us=(\d+)', out)
+            if not m or m[1] != '0':
+                raise RuntimeError(f'capture+fft failed: {out!r}')
+            rows.append(np.fft.fftshift(np.array(con.mr(FFT_ACC, 256), float)))
+            times.append(time.time() - t0); chip_ms.append(int(m[3]) / 1000)
+        dt = times[-1] / max(len(times) - 1, 1)
+        print(f'{len(rows)} frames in {times[-1]:.1f} s = {1 / dt:.1f} frames/s; on-chip capture+FFT {np.median(chip_ms):.1f} ms per frame')
+        freq = np.fft.fftshift(np.fft.fftfreq(256, 1 / 250e3))
+        if args.save:
+            np.savez(args.save, rows=np.array(rows), times=np.array(times), freq=freq)
+        if args.plot:
+            import matplotlib; matplotlib.use('Agg'); import matplotlib.pyplot as plt
+            db = 10 * np.log10(np.array(rows) + 1)
+            plt.figure(figsize=(9, 6)); plt.pcolormesh(freq / 1e3, times, db, shading='nearest', cmap='Blues')
+            plt.gca().invert_yaxis(); plt.xlabel('offset (kHz)'); plt.ylabel('time (s)'); plt.colorbar(label='dB')
+            plt.tight_layout(); plt.savefig(args.plot, dpi=100)
+        return
     if args.what == 'fft':
         import numpy as np
         con.cmd('hold on', 'hold st')

@@ -30,6 +30,49 @@ static inline u32 bitrev8(u32 x) {
   return x;
 }
 
+// ROM command handlers (same ABI as PRAM entries): (len, params, response)
+typedef int (*handler_t)(u32 len, const u8 *p, struct resp *r);
+#define H_SET_STANDBY ((handler_t)0xFF18)
+#define H_SET_RX      ((handler_t)0xFCFC)
+#define H_CAPTURE_CFG ((handler_t)0xF9A0)   // 0x0290
+#define H_CAPTURE_PTR ((handler_t)0x5B44)   // 0x0291: 2-byte write pointer
+#define CAP_WORDS 1280                      // 5 KB = 10 segments of 256 int8 I/Q samples
+#define POLL_MAX 200000
+
+// One-shot capture of source 0 into 0x804000, driven from inside the command. Expects packet
+// type 0x0B (raw) to be set. Returns the final write pointer; *polls = poll iterations.
+static u32 capture(u32 *polls) {
+  // const tables: no memcpy (there's no libc); the ROM handlers only read their parameters
+  static const u8 stby[1] = { 0 }, rx[3] = { 0xFF, 0xFF, 0xFF };
+  static const u8 cfg[10] = { 0xFF, 0, 0, 0, 0, 0xD0, 0, 0, CAP_WORDS >> 8, CAP_WORDS & 0xFF };
+  static const u8 stop[6] = { 0xFF, 0, 0, 0, 0, 0 };
+  u8 ptr[2];
+  struct resp pr;
+  pr.len = 0; pr.buf = ptr;
+  u32 v = 0, n = 0;
+  H_SET_STANDBY(1, stby, 0);
+  H_CAPTURE_CFG(10, cfg, 0);
+  H_SET_RX(3, rx, 0);
+  for (n = 0; n < POLL_MAX; n++) {
+    H_CAPTURE_PTR(0, 0, &pr);
+    v = ((u32)ptr[0] << 8) | ptr[1];
+    if (v >= CAP_WORDS * 4) break;
+  }
+  H_CAPTURE_CFG(6, stop, 0);
+  H_SET_STANDBY(1, stby, 0);
+  *polls = n;
+  return v;
+}
+
+// Entry 8 (debug): capture only. Returns 6 bytes: pointer (u16), poll iterations (u32).
+int capture_cmd(u32 len, const u8 *p, struct resp *r) {
+  u32 polls, v = capture(&polls);
+  r->buf[0] = v >> 8; r->buf[1] = v;
+  r->buf[2] = polls >> 24; r->buf[3] = polls >> 16; r->buf[4] = polls >> 8; r->buf[5] = polls;
+  r->len = 6;
+  return 3;
+}
+
 int fft_cmd(u32 len, const u8 *p, struct resp *r) {
   if (len < 2) return 1;
   u32 nseg = p[0], skip = p[1];
@@ -71,4 +114,17 @@ int fft_cmd(u32 len, const u8 *p, struct resp *r) {
   }
   r->buf[0] = 0; r->buf[1] = (u8)nseg; r->len = 2;
   return 3;
+}
+
+// Entry 9: capture + FFT in one command. Params: nseg, skip (as entry 7). Returns 4 bytes:
+// segments (u16), capture pointer (u16). 0xFFFF pointer = capture didn't complete.
+int capfft_cmd(u32 len, const u8 *p, struct resp *r) {
+  u32 polls, v = capture(&polls);
+  if (v < CAP_WORDS * 4) {
+    r->buf[0] = 0; r->buf[1] = 0; r->buf[2] = v >> 8; r->buf[3] = v; r->len = 4;
+    return 3;
+  }
+  int st = fft_cmd(len, p, r);
+  r->buf[2] = v >> 8; r->buf[3] = v; r->len = 4;
+  return st;
 }

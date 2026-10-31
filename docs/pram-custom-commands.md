@@ -92,11 +92,32 @@ correlation 1.0000, 0.09 dB rms difference across the 256 bins.
 
 ![On-chip FFT vs numpy](figures/onchip_fft.png)
 
-A frame currently takes ~0.45 s end to end, almost all of it the ~8 host commands needed for the
-capture through the USB console. Moving the capture into the command would make it one command.
-
 ```
 python3 tools/pram.py fft --frames 5 --check --plot spectrum.png
+```
+
+### Capture inside the command: a live waterfall (entries 8 and 9)
+
+The capture can also be driven from inside a PRAM command, by calling the ROM handlers for
+SetStandby (0xFF18), 0x0290 (0xF9A0), SetRx (0xFCFC) and the 0x0291 pointer read (0x5B44). **The
+capture DMA keeps running while our code holds the CPU**, so the chip's main loop isn't needed:
+
+| Entry | Does | On the chip |
+|---|---|---|
+| 8 | capture only (debug): returns the write pointer and the number of polls | 11.6 ms for 5 KB (10.2 ms of samples) |
+| 9 | capture + FFT, parameters as entry 7 | **49.9 ms per frame** |
+
+The host sets packet type 0x0B once, then each frame is one command plus the 1 KB readback:
+**6.6 frames/s** over the USB console (the readback, as hex text, is now the slow part).
+
+![Live waterfall computed on the chip](figures/onchip_waterfall.png)
+
+Over 20 s the waterfall shows a CW carrier at +30 kHz, then back-to-back LoRa SF7 / 62.5 kHz
+packets (chirps fill the channel), the ±50 kHz channel-filter edges, and a steady internal spur
+at −21 kHz.
+
+```
+python3 tools/pram.py waterfall --seconds 20 --save wf.npz --plot wf.png
 ```
 
 ## Other entries
@@ -109,12 +130,15 @@ python3 tools/pram.py fft --frames 5 --check --plot spectrum.png
 | 5 | storetest | writes and reads back one halfword in the PRAM result buffer |
 | 6 | onepoint | one sweep step without storing (debug) |
 | 7 | fft | averaged 256-point FFT of a raw capture (above) |
+| 8 | capture | capture driven from inside the command (debug) |
+| 9 | capfft | capture + FFT in one command (waterfall) |
 
 ## Build
 
 `firmware/pram/build.sh` builds `pram.bin` with ARC GCC 13 (`docker build -t arc-gcc -f
 docker/Dockerfile.gcc docker`): `-mcpu=em4_dmips -mrf16 -mno-sdata -Os -ffreestanding`, linked at
 0x101000. `-mrf16` matches the 16-register CPU; `-mno-sdata` keeps the compiler away from gp,
-which belongs to the ROM. The build fails if the image would reach the sweep buffer at 0x101A00.
+which belongs to the ROM. The build fails if the image would reach the sweep buffer at 0x101A00. Arrays initialised on the
+stack make GCC call `memcpy`, which doesn't exist here: use `static const` tables.
 `pram.bin` is checked in, so `tools/pram.py` works without Docker. The console's `rc` prints
 `us=` (command time including BUSY), which is how the timings above were measured.
