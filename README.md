@@ -119,7 +119,7 @@ Data tables:
   - packet type 0x01 is an empty slot that reuses the previous modem's setup.
 - **Custom code runs on the chip:** a PRAM blob adds host commands through ActivatePram
   (0x012D). An on-chip sweep covers 902–928 MHz in 1,041 points in 2.2 s, and an on-chip
-  capture + FFT streams a live waterfall at up to 306 frames/s ([pram-custom-commands.md](docs/pram-custom-commands.md)).
+  capture + FFT streams a live waterfall at up to 317 frames/s ([pram-custom-commands.md](docs/pram-custom-commands.md)).
 - Measured maxima: LoRa SF5/1000 kHz delivers 118 kbps, FLRC 2.08 Mbps. The chip's raw IQ TX
   path can transmit 2 m APRS that a Kenwood handheld decodes.
 
@@ -150,7 +150,7 @@ tools/       host tools: dump/disasm helpers, serial CLI, IQ capture, decoders, 
 tools/bench/ bench drivers: serial logger, link/capture scripts, APRS encoder/decoder
 firmware/pram/ custom PRAM commands (ARC assembly) loaded by tools/pram.py
 firmware/    standalone test firmware (PlatformIO): console, rate_bench, dualband_bench
-docker/      ARC binutils image for disassembly
+docker/      ARC binutils image for disassembly; patched ARC GCC for the PRAM code (Dockerfile.gcc)
 captures/    IQ test vectors (own node only) used by the tests
 logs/        gain sweep register dumps, RXSTAT logs
 ```

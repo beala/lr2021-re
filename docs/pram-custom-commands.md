@@ -74,7 +74,7 @@ The waterfall (30 sweeps, ~70 s) shows the test carrier at 912 MHz from the othe
 packets, energy only, nothing decoded), one unidentified burst at 912.2 MHz, and a rise at
 928 MHz present in every sweep.
 
-## On-chip FFT and live waterfall (entries 7–10, `fft.c`, `stage.S`)
+## On-chip FFT and live waterfall (entries 7–10, `fft.c`)
 
 The chip captures raw IQ (source 0, int8 I/Q at 250 kS/s with the 62.5 kHz LoRa setting, 1–10
 segments of 256 samples into 0x804000), computes windowed 256-point FFTs, and returns the
@@ -91,13 +91,13 @@ spectrum. The console's `wfrun` repeats that and streams binary frames to the PC
 
 | Segments averaged | Chip time per frame | Streamed frames/s (`wfrun`) |
 |---|---|---|
-| 1 | 2.82 ms | **306** |
-| 2 | 5.47 ms | 169 |
-| 4 | 10.3 ms | 93 |
-| 10 | 25.0 ms | 39 |
+| 1 | 2.73 ms | **317** |
+| 2 | 5.22 ms | 177 |
+| 4 | 9.85 ms | 97 |
+| 10 | 23.7 ms | 41 |
 
 Per frame outside the chip: SPI readback 0.34 ms, USB 0.09 ms. Against numpy on the same capture
-(`tools/pram.py fft --check`): same peak bin, correlation 0.9999, 0.14 dB rms difference.
+(`tools/pram.py fft --check`): same peak bin, correlation 1.0000, 0.05 dB rms difference.
 
 ![On-chip FFT vs numpy](figures/onchip_fft.png)
 
@@ -115,7 +115,7 @@ python3 tools/pram.py waterfall --seconds 20 --nseg 4 --save wf.npz --plot wf.pn
 python3 tools/pram.py fft --frames 5 --check --plot spectrum.png
 ```
 
-### How it got from 6.6 to 306 frames/s
+### How it got from 6.6 to 317 frames/s
 
 | Step | Effect |
 |---|---|
@@ -126,6 +126,7 @@ python3 tools/pram.py fft --frames 5 --check --plot spectrum.png
 | Raw 16 MHz SPI for the command and the readback | readback 1.73 → 0.34 ms |
 | 16-bit block-floating-point FFT (no 64-bit maths) | 3.8 → 2.3 ms per FFT |
 | Butterfly stages 3–8 in hand-written assembly | GCC spilled registers to the stack (only 16 exist) |
+| Back to C with a patched GCC (blink allocatable) and the ARC700 pipeline model | 1.29 → 1.21 ms per FFT, faster than the assembly (below) |
 | Load, window and stages 1–2 fused into one radix-4 pass | saves a pass over memory and most of the bit reversal |
 | Twiddles built in RAM from a 65-entry quarter-wave table | frees ~380 B of PRAM; RAM reads are also faster than PRAM reads |
 | dB straight from 32-bit power for 1 segment | skips the u64 accumulators |
@@ -153,7 +154,7 @@ instruction type:
 | `mpy` (32×32) | 3.0 |
 
 A radix-2 butterfly (4 multiplies, 4 loads, 4 stores, ~12 ALU ops) costs 36–40 cycles. A full
-256-point FFT is ~41k cycles (1.29 ms): ~2.6k for the max pre-pass, ~5k for the fused
+256-point FFT is ~39k cycles (1.21 ms): ~2.6k for the max pre-pass, ~5k for the fused
 load/window/radix-4 pass, the rest in stages 3–8.
 
 ### RAM used
@@ -179,15 +180,40 @@ it. The FFT checks the marker and rebuilds the table if anything overwrote it.
 
 ## Build
 
-`firmware/pram/build.sh` builds `pram.bin` with ARC GCC 13 (`docker build -t arc-gcc -f
-docker/Dockerfile.gcc docker`) and the linker script `pram.ld`, which packs `.text`, `.rodata` and
-`.data` from 0x101000. Flags: `-mcpu=em4_dmips -mrf16 -mno-sdata -Os -ffreestanding`, with the hot
-FFT functions at `O2`. The build fails if the image reaches the sweep buffer at 0x101C00 or if
+`firmware/pram/build.sh` builds `pram.bin` with a patched ARC GCC 13.3 (`docker build -t arc-gcc -f
+docker/Dockerfile.gcc docker`; builds the compiler from source, ~15 min) and the linker script
+`pram.ld`, which packs `.text`, `.rodata` and `.data` from 0x101000. Flags: `-mcpu=em4_dmips -mrf16
+-mno-sdata -Os -ffreestanding -fcall-saved-blink -mtune=arc700 -fschedule-insns -fsched-pressure`,
+with the hot FFT functions at `O2`. The build fails if the image reaches the sweep buffer at 0x101C00 or if
 anything lands in `.bss`. `pram.bin` is checked in, so `tools/pram.py` works without Docker.
 
 Pitfalls met along the way:
 - `-mrf16` matches the 16-register CPU. Assembly files need `.arc_attribute Tag_ARC_ABI_rf16, 1`
   too, or the linker refuses to mix them with the C objects.
+- With `-mrf16`, stock GCC allocates only 12 registers: r0–r3, r10–r15, r30 and fp. blink (r31)
+  would be a 13th in any function that saves it, but GCC never uses it, even with
+  `-fcall-saved-blink`: `arc_epilogue_uses` reports blink live at the function exit, so the
+  dataflow sees it live from entry to exit and it conflicts with everything.
+  `docker/gcc-arc-blink.patch` reports it only once the epilogue exists (as the ARM port does
+  for lr) when `-fcall-saved-blink` is given. The prologue then saves blink whenever it was
+  allocated, the epilogue restores it before `j_s [blink]`, and calls already clobber it.
+  Without the flag, GCC behaves as before.
+- GCC has no pipeline model for ARC EM, so it loads everything first and the multiplies wait on
+  the loads. `-mtune=arc700 -fschedule-insns` borrows the ARC700 model, which issues the
+  multiplies before the remaining loads. On the chip, per FFT:
+
+  | Build | Per FFT | Image (limit 3072 B) |
+  |---|---|---|
+  | stock GCC, butterflies in assembly (before) | 1.294 ms | 3032 B |
+  | patched GCC, assembly | 1.284 ms | 3036 B |
+  | patched GCC, assembly, ARC700 schedule | 1.271 ms | 3044 B |
+  | stock GCC, C butterflies, ARC700 schedule | 1.260 ms | 3084 B: doesn't fit |
+  | **patched GCC, C butterflies, ARC700 schedule** | **1.211 ms** | 3068 B |
+
+- An inline `asm` statement in a loop (e.g. an empty one to force an ordering) stops GCC from
+  using the zero-overhead `lp` loop.
+- A blob can only be loaded while no blob is active: writing PRAM over an active blob stalls the
+  chip (CMD −705). `set radio …` resets the chip first.
 - `-mno-sdata`: gp (r26) belongs to the ROM.
 - No libc or libgcc: stack arrays with initialisers become `memcpy` calls, and variable 64-bit
   shifts become `__ashldi3`. Use `static const` tables and 32-bit halves.

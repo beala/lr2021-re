@@ -12,7 +12,8 @@
 // stage scales by 1/2 only when it could overflow, and the exponent is folded back into a u64
 // power sum. The first two stages need no multiplies (twiddles 1 and -j).
 //
-// Build: -mcpu=em4_dmips -mrf16 (16-entry register file), -mno-sdata (gp belongs to the ROM).
+// Build (build.sh): -mcpu=em4_dmips -mrf16 (16-entry register file), -mno-sdata (gp belongs to the
+// ROM), -fcall-saved-blink with the patched GCC, -mtune=arc700 -fschedule-insns.
 #include "fft_tables.h"
 
 typedef unsigned int u32;
@@ -32,7 +33,34 @@ typedef signed char s8;
 #define TW_MARK ((volatile u32 *)0x807A00)
 #define TW_MAGIC 0x54574931                 // "TWI1"
 
-void fft_stage(s16 *w, u32 half, u32 sh, const s16 *tw);   // stage.S
+// One radix-2 DIT stage (stages 3-8), in place on w. For k = 0..half-1 (twiddle tw[k * 128/half])
+// and i = k, k + 2*half, ...:   t = b * w >> 15;  a' = (a + t) >> SH;  b' = (a - t) >> SH
+// (a = w[i], b = w[i + half]). SH is a constant, so the unscaled and scaled variants get their own
+// loops: 22 and 26 instructions in zero-overhead loops, no stack traffic. That needs the patched
+// GCC (docker/gcc-arc-blink.patch, -fcall-saved-blink: blink becomes a 13th register) and
+// -mtune=arc700 -fschedule-insns, whose pipeline model issues the multiplies before the a loads.
+static inline __attribute__((always_inline))
+void stage_k(s16 *w, u32 half, const s16 *tw, u32 cnt, const u32 SH) {
+  u32 stride = 4 * half;                    // s16 units: 2 * half points
+  for (u32 k = 0; k < half; k++, tw += 2 * cnt) {
+    s32 wr = tw[0], wi = tw[1];
+    s16 *pa = w + 2 * k, *pb = pa + 2 * half;
+    for (u32 j = 0; j < cnt; j++, pa += stride, pb += stride) {
+      s32 br = pb[0], bi = pb[1];
+      s32 tr = (br * wr - bi * wi) >> 15;
+      s32 ti = (br * wi + bi * wr) >> 15;
+      s32 a0 = pa[0], a1 = pa[1];
+      pa[0] = (a0 + tr) >> SH; pa[1] = (a1 + ti) >> SH;
+      pb[0] = (a0 - tr) >> SH; pb[1] = (a1 - ti) >> SH;
+    }
+  }
+}
+// tw: 128 x {cos, -sin} Q15; count of butterflies per twiddle = 128 / half (half is a power of 2).
+__attribute__((optimize("O2"), noinline))
+static void fft_stage(s16 *w, u32 half, u32 sh, const s16 *tw) {
+  u32 cnt = 128u >> __builtin_ctz(half);
+  if (sh) stage_k(w, half, tw, cnt, 1); else stage_k(w, half, tw, cnt, 0);
+}
 #define MAXSEG 10
 
 struct resp { u32 len; u8 *buf; };
@@ -98,7 +126,7 @@ static inline s32 hann(u32 n) {                     // Q15, from the twiddle cos
 //
 // Stages 1-2 are fused with the windowed, bit-reversed load: with bit-reversed input, output
 // positions i..i+3 (i = bitrev(r), r < 64) of stage 2 come from samples r, r+128, r+64, r+192,
-// so each of 64 iterations is one multiply-free radix-4 butterfly. Stages 3-8: stage.S.
+// so each of 64 iterations is one multiply-free radix-4 butterfly. Stages 3-8: fft_stage.
 __attribute__((optimize("O2"))) static u32 fft256(const s8 *x) {
   s16 *w = W;
   // largest raw sample magnitude -> windowed bound (window <= 1): (|x| * 32767) >> 8
@@ -251,8 +279,8 @@ int capfft_cmd(u32 len, const u8 *p, struct resp *r) {
 // Entry 10 (benchmark). Param: mode. 0: 1,000,000 iterations of a one-NOP zero-overhead loop
 // (1 cycle each, so the run time gives the CPU clock). 1: max pre-pass x10. 2: + windowed loads
 // x10. 3 (unused) / 4: full FFT x10. Time it with the console's rc us=.
-void bench_nops(void);   // stage.S
-void bench_micro(u32 mode);   // stage.S
+void bench_nops(void);   // bench.S
+void bench_micro(u32 mode);   // bench.S
 int bench_cmd(u32 len, const u8 *p, struct resp *r) {
   if (len < 1) return 1;
   u32 mode = p[0];

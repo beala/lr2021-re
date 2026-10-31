@@ -63,7 +63,7 @@ Radio commands (replies start with `  -> `, which the host tools parse):
 | `get tx` / `set tx <dBm>` | TX power: the LR2021 drive level, −9..22. On the NiceRF board this drives the external 2 W PA (see the table in `lib/LR2021Board/LR2021Board.cpp`) |
 | `loratx <hex>` | Send one LoRa packet: explicit header, CRC on, 16-symbol preamble, sync word 0x12 |
 | `rxstats` | Hardware RX counters: `rx`, `crc_err`, `hdr_err`, `tx` |
-| `wfrun <nseg> [frames]` | Stream the on-chip spectrum (PRAM entry 9, load it with `tools/pram.py load`) as binary frames until `x`: up to 306 frames/s. Used by `tools/pram.py waterfall` |
+| `wfrun <nseg> [frames]` | Stream the on-chip spectrum (PRAM entry 9, load it with `tools/pram.py load`) as binary frames until `x`: up to 317 frames/s. Used by `tools/pram.py waterfall` |
 | `pinmon <ms>` | XIAO only: count edges (hardware counters) and the high fraction on the pads wired to the MCU (DIO7, DIO8, DIO11). Prints `PM,<pad>,<edges>,<toggle Hz>,<high fraction>,<level>` |
 | `pinsnap <n>` | XIAO only: n ≤ 65536 raw samples of those pads at ~7.1 MS/s (bit0 DIO7, bit1 DIO8, bit2 DIO11), as `SNAPBIN <n> <ns per sample>` + bytes. See [docs/test-bus.md](../docs/test-bus.md) |
 

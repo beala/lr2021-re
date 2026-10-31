@@ -1,0 +1,18 @@
+--- a/gcc/config/arc/arc.cc
++++ b/gcc/config/arc/arc.cc
+@@ -10418,6 +10418,15 @@
+   if (regno == arc_tp_regno)
+     return true;
+ 
++  /* With -fcall-saved-blink, blink is an ordinary call-saved register:
++     the prologue saves it when it is used and the epilogue restores it
++     before the return, so it is only live at the exit from then on.
++     Before that, reporting it live would keep it from being allocated.  */
++  if (regno == RETURN_ADDR_REGNUM
++      && !fixed_regs[RETURN_ADDR_REGNUM]
++      && !ARC_INTERRUPT_P (fn_type))
++    return epilogue_completed;
++
+   if (regno == RETURN_ADDR_REGNUM)
+     return true;
+ 

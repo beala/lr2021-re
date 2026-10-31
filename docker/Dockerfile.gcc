@@ -1,2 +1,21 @@
+# ARC GCC 13.3 for the LR2021's PRAM code, patched so that -fcall-saved-blink lets the register
+# allocator use blink (r31). With -mrf16 that's 13 allocatable registers instead of 12.
+# Only the compiler proper is built (no libc or libgcc: the PRAM code uses neither); binutils
+# come from Ubuntu. Same command names as the stock package (arc-linux-gnu-gcc, ...).
 FROM ubuntu:24.04
-RUN apt-get update && apt-get install -y --no-install-recommends gcc-arc-linux-gnu binutils-arc-linux-gnu && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      binutils-arc-linux-gnu build-essential ca-certificates curl xz-utils \
+      libgmp-dev libmpfr-dev libmpc-dev patch \
+ && rm -rf /var/lib/apt/lists/*
+ARG GCC_VER=13.3.0
+COPY gcc-arc-blink.patch /src/
+RUN cd /src && curl -fsSL https://ftp.gnu.org/gnu/gcc/gcc-$GCC_VER/gcc-$GCC_VER.tar.xz | tar xJ \
+ && cd gcc-$GCC_VER && patch -p1 < ../gcc-arc-blink.patch \
+ && mkdir ../build && cd ../build \
+ && ../gcc-$GCC_VER/configure --target=arc-linux-gnu --prefix=/usr \
+      --with-as=/usr/bin/arc-linux-gnu-as --with-ld=/usr/bin/arc-linux-gnu-ld \
+      --enable-languages=c --without-headers --disable-nls --disable-shared \
+      --disable-multilib --disable-threads --disable-libssp --disable-libgomp \
+      --disable-libquadmath --disable-libatomic --program-prefix=arc-linux-gnu- \
+ && make -j"$(nproc)" all-gcc && make install-gcc \
+ && cd / && rm -rf /src
