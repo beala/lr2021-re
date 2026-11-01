@@ -66,10 +66,10 @@ This command family was originally discovered by
 |---|---|---|---|---|
 | 0x0213 | 0xC860 | struct 0x800438 | Get/set internal parameters, sub-index 0x0B–0x15. `rc 213 1 0B` → 04 | [HW] |
 | 0x0214 | 0xF86C | via 0x46D0: 0xF02004, 0xF02018, 0xF23050, 0xF2A00C, 0xF30128 | 1-byte param; clock / IRQ block configuration | [RE] |
-| 0x021F | 0xF144 | 0xF30A30 | LoRa modem register not in the datasheet | [RE] |
-| 0x0226 | 0x4464 | 0xF30A1C | LoRa; also used by SetLoraPacketParams. Takes ≥ 6 bytes of params | [RE] |
-| 0x022D | 0xF3FC | 0xF30A14, 0xF30A68, 0xF30B00, 0xF30018 | LoRa sync/detection | [RE] |
-| 0x022E | 0xF38C | same as 0x022D | LoRa sync/detection, up to 3 × u16 | [RE] |
+| 0x021F | 0xF144 | 0xF30A30[28:16], RAM 0x8003E0 | 13-bit field, 0 after reset. Bits [27:24] act in the payload demodulator (1–4 cause CRC errors; 0 is as good as any). See [lora-detection.md](lora-detection.md) | [HW] partly |
+| 0x0226 | 0x4464 | 0xF30A1C[17], RAM 0x8002F0 | Configuration block next to SetLoraCadParams' (24-bit timeout, u16, small params); p0 bit 7 enables. No effect on ordinary packets. See [lora-detection.md](lora-detection.md) | [RE] |
+| 0x022D | 0xF3FC | 0xF30A68[12:8], [4:0] | **Raw LoRa sync word**: two 5-bit symbol values (SetLoraSyncword 0x12 = 02 04), odd values allowed. See [lora-detection.md](lora-detection.md) | [HW] |
+| 0x022E | 0xF38C | 0xF30B00/04/08 | **Raw side-detector sync words**, up to 3 × u16, same encoding as 0x022D | [RE] |
 | 0x022F | 0xE404 | 0xF30C28[28:24], [22:21], [20]; RAM 0x8004C0 | **AGC configuration**. Sits next to SetAgcGainManual | [RE] |
 | 0x0230 | 0xE1F4 | 0xF30814 | generic packet engine (FSK/OOK/BLE/Z-Wave) register write | [RE] |
 | 0x0231 | 0xE27C | 0xF30818 | 〃 | [RE] |

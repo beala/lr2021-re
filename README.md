@@ -78,6 +78,7 @@ which has no location set.
 | [docs/pram-custom-commands.md](docs/pram-custom-commands.md) | Worked examples on the CPU: an on-chip spectrum sweep and a 464 frames/s FFT waterfall |
 | [docs/test-bus.md](docs/test-bus.md) | Undocumented test bus on the DIO pads (0x012F): selector map, packet flags; DIO function codes |
 | [docs/ranging.md](docs/ranging.md) | RTToF ranging between the two boards with raw commands; the PRAM patch fixes the ranging RSSI |
+| [docs/lora-detection.md](docs/lora-detection.md) | Undocumented LoRa sync/detection commands (raw sync word 0x022D, 0x021F, 0x0226); the sync word barely filters |
 | [docs/dualband-bench.md](docs/dualband-bench.md) | 908 MHz / 2478 MHz dual-band CAD scanning: switch time, catch rates |
 | [firmware/README.md](firmware/README.md) | The test firmware: console (`mr`, `mw`, `rc`, `stream`, `iqstream`, LoRa RX/TX), benches, boards |
 
@@ -124,6 +125,9 @@ Data tables:
   (0x012D). The CPU is an ARCv2 EM at 32.1 MHz with a 16-entry register file; a small GCC
   patch (checked against GCC's torture tests) frees a 13th register for C ([lr2021-cpu.md](docs/lr2021-cpu.md)). An on-chip sweep covers 902–928 MHz in 1,041 points in 2.2 s, and an on-chip
   capture + FFT streams a live waterfall at up to 464 frames/s (the next capture overlapped with the FFT) ([pram-custom-commands.md](docs/pram-custom-commands.md)).
+- **The LoRa sync word is a weak filter:** a receiver on 0x12 accepts any first nibble except 0
+  (0x22, 0x42, 0xF2 all 100 %) and some packets with a different second nibble. Undocumented
+  0x022D sets the two sync symbols directly, odd values included ([lora-detection.md](docs/lora-detection.md)).
 - Measured maxima: LoRa SF5/1000 kHz delivers 118 kbps, FLRC 2.08 Mbps. The chip's raw IQ TX
   path can transmit 2 m APRS that a Kenwood handheld decodes.
 
@@ -144,6 +148,7 @@ cd firmware && pio run -e xiao_console -t upload --upload-port /dev/ttyACM0 && c
 python3 tools/sc.py -p /dev/ttyACM0 "mr F30154 1" "rc 22A 10"      # read gain reg, raw packet status
 python3 -u tools/continuous_capture.py --seconds 0 --decode       # live MeshCore sniffer from raw IQ
 python3 tools/ranging.py --n 200 --sf 9                           # RTToF ranging between the two boards (TX at 908 MHz)
+python3 tools/lora_per.py --tx-rc 0223:42 --rx-rc 0223:12         # packet delivery with raw commands on either side (908 MHz)
 ```
 
 ## Layout
