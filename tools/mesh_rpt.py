@@ -143,12 +143,7 @@ def main():
         time.sleep(1)
         return
     print(f'repeating as {a.id[:2]} on {a.mhz} MHz for {a.seconds} s; SPI pins released')
-    c.s.reset_input_buffer()
-    c.s.write(f'spifree np {"s " if a.sleep else ""}w{a.seconds * 1000} 01 2D 01 02\r'.encode())
-    end = time.time() + a.seconds + 10
-    buf = b''
-    while b'spifree bits' not in buf and time.time() < end:
-        buf += c.s.read(4096)
+    pram.spifree(c, f'np {"s " if a.sleep else ""}w{a.seconds * 1000} 01 2D 01 02', a.seconds + 10)
     c.rc(0x0100, 2)
     c.rc(0x0100, 2)                   # resynchronise the SPI after the pins come back
     for k, v in mesh(c, 2).items():

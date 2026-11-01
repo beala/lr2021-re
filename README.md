@@ -83,6 +83,7 @@ which has no location set.
 | [docs/pram-lora-tx.md](docs/pram-lora-tx.md) | The CPU can't write the TX FIFO directly, but it can clock WriteTxFifo into its own SPI slave through the SPI pads (pulls only, MCU pins released) and the hardware modem sends it; or encode LoRa itself and play the chirps through the synthesizer. Both decode on another LR2021 with CRC good |
 | [docs/pram-waterfall-text.md](docs/pram-waterfall-text.md) | Any text written across frequency by the chip's own CW carrier, a 5×7 font in PRAM, readable on an RTL-SDR waterfall |
 | [docs/pram-repeater.md](docs/pram-repeater.md) | A simple MeshCore repeater that runs on the LR2021 itself: receive, dedup, path edit, TRACE, MeshCore's random delay, a TX queue, signed adverts on its own clock, transmit through the self-written TX FIFO; 20/20 correct decisions on the bench, packets up to 255 bytes; a real MeshCore companion heard its floods repeated and listed it from its advert |
+| [docs/pram-meshtastic.md](docs/pram-meshtastic.md) | A Meshtastic node (CLIENT role) that runs on the LR2021 itself: managed-flooding relays from the clear outer header (dedup, hop limit, next hop, SNR-weighted contention window, dropping its relay when another node relays first, upgrades), and host-encrypted NodeInfo on its own clock so phones list it. GPL-3.0 |
 | [docs/pram-demod.md](docs/pram-demod.md) | APRS demodulated on the chip in the background: the CPU reads the raw-I/Q FIFO by moving it between two buffers, an IRQ 42 handler of our own does the work, RxDone on the IRQ line per frame |
 | [docs/lora-detection.md](docs/lora-detection.md) | Undocumented LoRa sync/detection commands (raw sync word 0x022D, 0x021F, 0x0226); the sync word barely filters |
 | [docs/dualband-bench.md](docs/dualband-bench.md) | 908 MHz / 2478 MHz dual-band CAD scanning: switch time, catch rates |
@@ -156,6 +157,10 @@ Data tables:
   counter in the radio's timer block and sends a host-signed MeshCore advert on schedule; a companion
   lists it by name. It forwards TRACE packets with its SNR, and queues about 8 packets to send, each
   with its own due time ([pram-repeater.md](docs/pram-repeater.md)).
+- **It's a Meshtastic node too.** A second blob relays Meshtastic packets with the CLIENT role's
+  managed flooding. It reads only the clear 16-byte header, waits Meshtastic's SNR-weighted
+  contention window, and drops its relay when it hears another node relay first. Every 3 h it sends
+  a NodeInfo that the host encrypted for it ([pram-meshtastic.md](docs/pram-meshtastic.md)).
 - **The chip demodulates too:** a PRAM blob decodes APRS (AFSK 1200) from the radio's raw I/Q in
   the background, taking over the FIFO interrupt through a copied vector table, and raises RxDone
   for each good frame, like a built-in modem. 20/20 frames on each board, no FIFO overruns in 42 s
@@ -212,4 +217,6 @@ Only transmit where you're licensed to, and test into a dummy load.
 
 ## License
 
-The code and documentation in this repository are released under the MIT license (see `LICENSE`).
+The code and documentation in this repository are released under the MIT license (see `LICENSE`),
+except the Meshtastic node: `firmware/pram/meshtastic/` and `tools/meshtastic_node.py` port rules
+from the Meshtastic firmware and are GPL-3.0-only (see `firmware/pram/meshtastic/COPYING`).

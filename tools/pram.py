@@ -52,6 +52,18 @@ class Console:
                 break
         return buf.decode(errors='replace')
 
+    def read_for(self, seconds, until=None):
+        """Read for `seconds` (or until `until` arrives), sending an empty line every 0.5 s: with USB
+        autosuspend on (e.g. TLP, 2 s idle) the host suspends a quiet link and the board's output is
+        lost. The console ignores empty lines; spifree drops what it gets while it waits."""
+        end, buf, ka = time.time() + seconds, b'', 0
+        while time.time() < end and not (until and until.encode() in buf):
+            buf += self.s.read(4096)
+            if time.time() > ka:
+                self.s.write(b'\r')
+                ka = time.time() + 0.5
+        return buf
+
     def rc(self, op, nread, params=b'', timeout=5.0):
         text = f'rc {op:04X} {nread}' + ''.join(f' {b:02X}' for b in params)
         out = self.cmd(text, 'rc st=', timeout)
@@ -68,6 +80,13 @@ class Console:
             if m:
                 vals += [int(w, 16) for w in m[2].split()]
         return vals[:words]
+
+
+def spifree(con, args, seconds):
+    """Run the console's `spifree <args>` and return its reply (Console.read_for keeps the USB link up)."""
+    con.s.reset_input_buffer()
+    con.s.write(f'spifree {args}\r'.encode())
+    return con.read_for(seconds, 'spifree bits').decode(errors='replace')
 
 
 def load(con, path):

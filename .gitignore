@@ -36,4 +36,7 @@ results/
 firmware/pram/*.elf
 firmware/pram/*.lst
 firmware/pram/*.o
+firmware/pram/meshtastic/*.elf
+firmware/pram/meshtastic/*.lst
+firmware/pram/meshtastic/*.o
 docker/gcc-patch-check-work/

@@ -9,6 +9,7 @@
 //   get radio                       -> "  -> > <MHz>,<BW kHz>,<SF>,<CR>"
 //   set radio <MHz>,<BW kHz>,<SF>,<CR>   re-initialise the chip with these LoRa settings
 //   get tx / set tx <dBm>           TX power (LR2021 drive level, -9..22)
+//   set sync <hex>                  LoRa sync word (boot: 12, private/MeshCore; 2B: Meshtastic)
 //   loratx <hex>                    send one LoRa packet (explicit header, CRC on, 16-symbol preamble)
 //   rxstats                         hardware RX counters
 //   spifree [np] [s] [w<ms>] <hex>  send a command frame, release NSS/SCK/MOSI until BUSY drops (PRAM drives them)
@@ -37,7 +38,7 @@
 #include "LR2021DebugCLI.h"
 
 static struct { float mhz = DEFAULT_FREQ_MHZ, bw = DEFAULT_BW_KHZ; uint8_t sf = DEFAULT_SF, cr = DEFAULT_CR;
-                int8_t dbm = DEFAULT_TX_DBM; } cfg;
+                int8_t dbm = DEFAULT_TX_DBM; uint8_t sync = 0x12; } cfg;
 static bool rxActive = false;
 static bool dirty = false;  // a debug command may have changed the chip; re-init before RX
 static uint32_t rxOk = 0, rxCrc = 0, rxHdr = 0, txCount = 0;
@@ -49,6 +50,7 @@ static void stopRx() {
 
 static bool reinit() {
   bool ok = radio.init(cfg.mhz, cfg.bw, cfg.sf, cfg.cr, cfg.dbm);
+  if (ok && cfg.sync != 0x12) ok = radio.setSyncWord(cfg.sync) == RADIOLIB_ERR_NONE;
   dirty = !ok;
   return ok;
 }
@@ -474,6 +476,15 @@ static bool handleRadio(const char* cmd) {
     if (ok) { lr2021dbg::hold = false; startRx(); }
     return true;
   }
+  if (!strncmp(cmd, "set sync ", 9)) {     // LoRa sync word, e.g. 12 (private, MeshCore), 2B (Meshtastic)
+    cfg.sync = strtoul(cmd + 9, NULL, 16);
+    bool wasRx = rxActive;
+    stopRx();
+    bool ok = reinit();
+    Serial.println(ok ? "  -> OK" : "  -> ERR init");
+    if (ok && (wasRx || !lr2021dbg::hold)) startRx();
+    return true;
+  }
   if (!strcmp(cmd, "get tx")) {
     Serial.printf("  -> > %d\r\n", cfg.dbm);
     return true;
@@ -583,7 +594,7 @@ static bool handleRadio(const char* cmd) {
   }
   if (!strcmp(cmd, "help")) {
     Serial.println("# debug: mr mw rc err romprobe cap capwait stream streamdump streamstats iqstream hold wfrun aprswait scanwait");
-    Serial.println("# radio: get radio | set radio <MHz>,<BW>,<SF>,<CR> | get tx | set tx <dBm> | loratx <hex> | rxstats");
+    Serial.println("# radio: get radio | set radio <MHz>,<BW>,<SF>,<CR> | get tx | set tx <dBm> | set sync <hex> | loratx <hex> | rxstats");
     Serial.printf("# %s, hold %s\r\n", board.getManufacturerName(), lr2021dbg::hold ? "on" : "off");
     return true;
   }
