@@ -35,6 +35,8 @@ typedef int (*handler_t)(u32 len, const u8 *p, struct resp *r);
 #define H_PKT_LEN     ((handler_t)0x5CA8)   // 0x0212 GetRxPktLength (2 bytes BE)
 #define H_STOP_TO_PRE ((handler_t)0x1149C)  // 0x0209 StopTimeoutOnPreamble
 u32 fifo_write(const u8 *d, u32 n, u32 hb);
+void pads_idle(u32 *saved);
+void pads_restore(const u32 *saved);
 
 #define IRQ (*(volatile u32 *)0xF2A00C)     // IRQ status, write 1 to clear
 #define IRQ_PRE     (1u << 5)
@@ -59,7 +61,7 @@ u32 fifo_write(const u8 *d, u32 n, u32 hb);
 #define TXB  ((u8 *)0x807800)               // packet waiting to go out
 #define RXB  ((u8 *)0x807900)               // last received packet
 // 0x807A00-0x807BFF: RX FIFO (RXF_RAM)
-#define SEEN ((u32 *)0x807E80)              // 32 hashes
+#define SEEN ((u32 *)0x807F00)              // 32 hashes (after the state at 0x807E00)
 #define NSEEN 32
 enum { S_OFF, S_RX, S_TX };
 struct rs {
@@ -68,6 +70,7 @@ struct rs {
   u32 rx_pre, tx_pre, hb, sf, bwc, cr, ffac, dfac, maxhops;
   u32 pending, txlen, delay, rng, seen_pos;
   u32 rx, crc, hdr_err, fwd_flood, fwd_direct, dup, ignored, busy, txdone, spi_fail, events, last_len;
+  u32 padcfg[3];                       // SPI pads as found at start
 };
 #define RS ((struct rs *)0x807E00)
 #define RUNNING 0x4D455348u                 // RAM isn't cleared at load: a magic, not just nonzero
@@ -235,10 +238,10 @@ static void put32(u8 *o, u32 v) { o[0] = v; o[1] = v >> 8; o[2] = v >> 16; o[3] 
 // path hash), RX preamble (1), TX preamble (1), half-bit delay for the SPI pads (1, cycles), SF (1),
 // bw code (1, 3-6), CR (1, 1-4), flood and direct delay factors (1 each, tenths of the airtime),
 // flood hop limit (1).
-//   op 1  start receiving and forwarding
+//   op 1  start receiving and forwarding; the SPI pads idle with NSS pulled up, SCK and MOSI down
 //   op 2  status
 //   op 3  inject: handle RXB[0..len) as if received (len (1)); reports what it would send
-//   op 0  stop: give the state slot back (send SetStandby next)
+//   op 0  stop: give the state slot back, restore the SPI pads (send SetStandby next)
 // Response, 16 LE words: state | pending << 8 | hooked << 16, received, CRC errors, header errors,
 // floods forwarded, directs forwarded, duplicates, ignored, busy, TX done, SPI write failures,
 // events, last length, length waiting, delay waiting (ticks), IRQ status.
@@ -248,7 +251,10 @@ int rpt_cmd(u32 len, const u8 *p, struct resp *r) {
   u32 op = p[0];
   if (op == 1) {
     if (len < 14 || p[8] < 5 || p[8] > 12 || p[9] < 3 || p[9] > 6 || p[10] < 1 || p[10] > 4 || p[7] == 0) return 1;
-    if (b->running != RUNNING || STATE_SLOT != (u32)rpt_state) b->gate_saved = IRQ_GATE;
+    if (b->running != RUNNING || STATE_SLOT != (u32)rpt_state) {   // not a restart
+      b->gate_saved = IRQ_GATE;
+      pads_idle(b->padcfg);
+    }
     IRQ_GATE |= IRQ_ALL;
     for (u32 i = 0; i < 4; i++) b->id[i] = p[1 + i];
     b->rx_pre = p[5]; b->tx_pre = p[6]; b->hb = p[7]; b->sf = p[8]; b->bwc = p[9]; b->cr = p[10];
@@ -268,7 +274,7 @@ int rpt_cmd(u32 len, const u8 *p, struct resp *r) {
     b->pending = 0;
     handle(b, p[1]);
   } else if (op == 0) {
-    if (b->running == RUNNING) IRQ_GATE = b->gate_saved;
+    if (b->running == RUNNING) { IRQ_GATE = b->gate_saved; pads_restore(b->padcfg); }
     b->running = 0;
     b->state = S_OFF;
     if (STATE_SLOT == (u32)rpt_state) STATE_SLOT = b->orig;

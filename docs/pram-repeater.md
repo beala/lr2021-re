@@ -76,6 +76,24 @@ The companion sent two flood messages and **heard both repeated** by the LR2021.
 counters for the run: 2 received, 2 floods forwarded, 2 TX done, no CRC or header errors, no
 duplicates, nothing ignored, no SPI write failures.
 
+## With the MCU asleep or off
+
+While the repeater runs, the chip pulls NSS up and SCK and MOSI down itself (pad cfg bits 5:4),
+switching to data levels only while it writes the FIFO, so floating MCU pins can't start a stray
+SPI transaction. Op 0 puts the pads back as they were.
+
+The same 20-packet bench (floods with 0–3 hops, directs for us and for others, duplicates with a
+longer path), with the MCU doing nothing:
+
+| MCU | Result |
+|---|---|
+| Sleeping: the console idles in `delay()` (`mesh_rpt.py run --sleep`) | 11/11 repeated byte for byte, 9/9 correctly silent; chip counters as before, 0 SPI write failures |
+| **Off:** System OFF, USB gone, only a reset wakes it (`mesh_rpt.py run --sysoff`, console `sysoff`) | **11/11 repeated, 9/9 correctly silent** |
+
+So the radio needs nothing from the MCU but power and NRESET held high. On the XIAO, D7 (wired to the
+LR2021's DIO7) is the System OFF wake pin, so a future version of the blob could wake the MCU
+itself by driving DIO7 high.
+
 ## Entries (`mesh.bin`)
 
 | Entry | Params | What it does |
@@ -88,12 +106,12 @@ errors, floods forwarded, directs forwarded, duplicates, ignored, busy, TX done,
 failures, events, last length, length waiting, delay waiting (ticks), IRQ status.
 
 RAM: 0x807800 packet to send, 0x807900 last received packet, 0x807A00 RX FIFO, 0x807E00 state,
-0x807E80 the hashes.
+0x807F00 the hashes.
 
 ## Limits
 
-- **The MCU must keep its NSS, SCK and MOSI pins floating** while the chip repeats. To use the
-  radio itself it takes the pins back (the console's `spifree` does so when its time is up), and
+- **The MCU must keep its NSS, SCK and MOSI pins floating** while the chip repeats: asleep or off
+  is fine (above). To use the radio itself it takes the pins back (the console's `spifree` does so when its time is up), and
   any packet the chip tries to send meanwhile is dropped, harmlessly.
 - Simple: no transport codes or regions, no TRACE, no ACK special cases, no listen-before-talk
   beyond the RX wait, one packet in flight, no flood hop limits per type, no airtime budget.

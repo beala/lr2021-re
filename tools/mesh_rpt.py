@@ -8,6 +8,9 @@ chip's counters.
 
   python3 tools/mesh_rpt.py run --seconds 60                    # repeat on the console's channel
   python3 tools/mesh_rpt.py run --mhz 910.525 --id C7112233 --preamble 32 --seconds 600
+  python3 tools/mesh_rpt.py run --sleep --seconds 600     # the MCU sleeps in delay() meanwhile
+  python3 tools/mesh_rpt.py run --sysoff                  # the MCU powers down (System OFF) for good;
+                                                          # reset or replug it to get the console back
 
 MeshCore uses a 32-symbol preamble at SF7-8 (16 from SF9); the console's own `loratx` uses 16, which
 is the default here so the bench boards can talk to it. Only transmit where you're allowed to.
@@ -53,6 +56,8 @@ def main():
     r.add_argument('--hops', type=int, default=64, help='flood hop limit')
     r.add_argument('--half-bit', type=int, default=8, help='SPI pad half-bit delay, CPU cycles')
     r.add_argument('--seconds', type=int, default=60)
+    r.add_argument('--sleep', action='store_true', help='the MCU sleeps instead of watching the SPI lines')
+    r.add_argument('--sysoff', action='store_true', help='leave the chip repeating and put the MCU into System OFF')
     a = ap.parse_args()
 
     c = pram.Console(a.port)
@@ -66,9 +71,14 @@ def main():
     params = bytes.fromhex(a.id) + bytes([a.preamble, a.preamble, a.half_bit, a.sf, BW_CODE[a.bw], a.cr - 4,
                                           round(a.flood_factor * 10), round(a.direct_factor * 10), a.hops])
     mesh(c, 1, params)
+    if a.sysoff:
+        print(f'repeating as {a.id[:2]} on {a.mhz} MHz; MCU going to System OFF (reset or replug to wake)')
+        c.s.write(b'sysoff\r')
+        time.sleep(1)
+        return
     print(f'repeating as {a.id[:2]} on {a.mhz} MHz for {a.seconds} s; SPI pins released')
     c.s.reset_input_buffer()
-    c.s.write(f'spifree np w{a.seconds * 1000} 01 2D 01 02\r'.encode())
+    c.s.write(f'spifree np {"s " if a.sleep else ""}w{a.seconds * 1000} 01 2D 01 02\r'.encode())
     end = time.time() + a.seconds + 10
     buf = b''
     while b'spifree bits' not in buf and time.time() < end:

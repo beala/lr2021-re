@@ -149,7 +149,8 @@ Data tables:
   strips its path hash, waits MeshCore's random delay on the radio's own timer and transmits again,
   writing its TX FIFO through its own SPI pads. The MCU only leaves its SPI pins floating. On the
   bench, 20 mixed packets got 20 correct decisions, and floods up to 255 bytes came back byte for
-  byte. A stock MeshCore companion heard its flood messages repeated by it ([pram-repeater.md](docs/pram-repeater.md)).
+  byte. A stock MeshCore companion heard its flood messages repeated by it, and it keeps
+  repeating with the MCU powered down in System OFF ([pram-repeater.md](docs/pram-repeater.md)).
 - **The chip demodulates too:** a PRAM blob decodes APRS (AFSK 1200) from the radio's raw I/Q in
   the background, taking over the FIFO interrupt through a copied vector table, and raises RxDone
   for each good frame, like a built-in modem. 20/20 frames on each board, no FIFO overruns in 42 s

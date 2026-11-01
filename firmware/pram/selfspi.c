@@ -42,3 +42,15 @@ u32 fifo_write(const u8 *d, u32 n, u32 hb) {
   for (u32 i = 1; i <= 3; i++) PAD_CFG(i) = cfg[i];
   return TXF_LEVEL & 0x7FF;
 }
+
+// Idle levels while nobody drives the SPI pins: NSS pulled up (deselected), SCK and MOSI pulled
+// down, so a sleeping MCU's floating pins can't start a stray transaction. fifo_write saves and
+// restores whatever the pads had, so these stay in place between packets.
+void pads_idle(u32 *saved) {
+  for (u32 i = 1; i <= 3; i++) saved[i - 1] = PAD_CFG(i);
+  pad(P_NSS, 1); pad(P_SCK, 0); pad(P_MOSI, 0);
+}
+
+void pads_restore(const u32 *saved) {
+  for (u32 i = 1; i <= 3; i++) PAD_CFG(i) = saved[i - 1];
+}

@@ -11,7 +11,8 @@
 //   get tx / set tx <dBm>           TX power (LR2021 drive level, -9..22)
 //   loratx <hex>                    send one LoRa packet (explicit header, CRC on, 16-symbol preamble)
 //   rxstats                         hardware RX counters
-//   spifree <hex>                   send a command frame, release NSS/SCK/MOSI until BUSY drops (PRAM drives them)
+//   spifree [np] [s] [w<ms>] <hex>  send a command frame, release NSS/SCK/MOSI until BUSY drops (PRAM drives them)
+//   sysoff                          release the SPI pins and put the MCU into System OFF (reset to wake)
 //   rxread                          read the packet in the RX FIFO (after a raw RX, e.g. tools/scan.py)
 //   pinmon <ms> / pinsnap <n>       XIAO only: watch the pads wired to the MCU (docs/test-bus.md)
 //   wfrun <nseg> [frames] [ov]      stream the on-chip spectrum (PRAM entry 9) as binary frames until x;
@@ -351,6 +352,7 @@ static void scanwait(uint32_t ms) {
 // -2 BUSY stuck high> us=<BUSY high time>". Read results with mr afterwards.
 static bool spifreePulls = true;
 static uint32_t spifreeMinMs = 0;
+static bool spifreeSleep = false;   // `spifree ... s ...`: idle in delay() (CPU sleeps) instead of sampling the lines
 static uint8_t sfMosi[16], sfMiso[16];
 static uint32_t sfBits;
 static inline void sfEdge(int sck, int lastSck) {
@@ -399,6 +401,7 @@ static void spifree(const uint8_t* cmd, size_t n) {
   }
   if (st == 0) while (millis() - tm < spifreeMinMs) {    // the chip may drop BUSY itself mid-command
     if (Serial.available() && Serial.read() == 'x') break;   // 'x' ends the wait early
+    if (spifreeSleep) { delay(100); continue; }               // FreeRTOS idles the CPU (WFE) meanwhile
     int sck = digitalRead(P_LORA_SCLK);
     ns++;
     nssLow += !digitalRead(P_LORA_NSS);
@@ -423,6 +426,21 @@ static void spifree(const uint8_t* cmd, size_t n) {
   Serial.print(" miso=");
   for (uint32_t i = 0; i < (sfBits + 7) / 8; i++) Serial.printf("%02X", sfMiso[i]);
   Serial.print("\n");
+}
+
+// sysoff: hand the radio's SPI pins to the chip (inputs, no pulls: a PRAM repeater pulls NSS up and
+// SCK/MOSI down itself) and put the nRF52 into System OFF. Only a reset, a replug or DIO7 (D7)
+// going high wakes it, and it then boots from scratch. Start the chip's job before this.
+static void sysoff() {
+  Serial.println("sysoff: MCU off, SPI pins released; reset, replug or DIO7 high to wake");
+  Serial.flush();
+  delay(200);
+  SPI.end();
+  pinMode(P_LORA_NSS, INPUT);
+  pinMode(P_LORA_SCLK, INPUT);
+  pinMode(P_LORA_MOSI, INPUT);
+  pinMode(P_LORA_MISO, INPUT);
+  systemOff(D7, 1);
 }
 
 static int hexval(char c) {
@@ -513,6 +531,11 @@ static bool handleRadio(const char* cmd) {
     scanwait(strtoul(cmd + 9, NULL, 0));
     return true;
   }
+  if (!strcmp(cmd, "sysoff")) {
+    stopRx();
+    sysoff();
+    return true;
+  }
   if (!strncmp(cmd, "spifree ", 8)) {
     static uint8_t buf[64];
     size_t n = 0;
@@ -520,6 +543,8 @@ static bool handleRadio(const char* cmd) {
     spifreePulls = strncmp(p0, "np ", 3) != 0;
     if (!spifreePulls) p0 += 3;
     spifreeMinMs = 0;
+    spifreeSleep = strncmp(p0, "s ", 2) == 0;
+    if (spifreeSleep) p0 += 2;
     if (*p0 == 'w') { char* q; spifreeMinMs = strtoul(p0 + 1, &q, 10); p0 = q; }
     for (const char* p = p0; *p && n < sizeof(buf);) {
       char* q;
