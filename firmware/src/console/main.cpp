@@ -11,6 +11,7 @@
 //   get tx / set tx <dBm>           TX power (LR2021 drive level, -9..22)
 //   loratx <hex>                    send one LoRa packet (explicit header, CRC on, 16-symbol preamble)
 //   rxstats                         hardware RX counters
+//   spifree <hex>                   send a command frame, release NSS/SCK/MOSI until BUSY drops (PRAM drives them)
 //   rxread                          read the packet in the RX FIFO (after a raw RX, e.g. tools/scan.py)
 //   pinmon <ms> / pinsnap <n>       XIAO only: watch the pads wired to the MCU (docs/test-bus.md)
 //   wfrun <nseg> [frames] [ov]      stream the on-chip spectrum (PRAM entry 9) as binary frames until x;
@@ -343,6 +344,86 @@ static void scanwait(uint32_t ms) {
   Serial.printf("scanwait done packets %lu%s\n", (unsigned long)pkts, err ? " error" : "");
 }
 
+// spifree <hex bytes>: send one command frame, then let go of NSS, SCK and MOSI (high-Z, NSS
+// pulled up, SCK and MOSI pulled down) until BUSY has risen and dropped again, then take SPI back.
+// While the pins are free a PRAM command can drive those pads itself (rpt.bin entry 3 clocks
+// WriteTxFifo into the chip's own SPI slave). Prints "spifree st=<0 ok, -1 BUSY never rose,
+// -2 BUSY stuck high> us=<BUSY high time>". Read results with mr afterwards.
+static bool spifreePulls = true;
+static uint32_t spifreeMinMs = 0;
+static uint8_t sfMosi[16], sfMiso[16];
+static uint32_t sfBits;
+static inline void sfEdge(int sck, int lastSck) {
+  if (sck && !lastSck && sfBits < 128) {
+    uint32_t i = sfBits >> 3; uint8_t m = 0x80 >> (sfBits & 7);
+    if (digitalRead(P_LORA_MOSI)) sfMosi[i] |= m;
+    if (digitalRead(P_LORA_MISO)) sfMiso[i] |= m;
+    sfBits++;
+  }
+}   // `spifree w<ms> ...`: keep the pins released at least this long   // `spifree np ...`: no MCU pulls (the chip sets levels with its own pulls)
+static void spifree(const uint8_t* cmd, size_t n) {
+  static uint8_t tx[64];
+  if (n > sizeof(tx)) n = sizeof(tx);
+  memcpy(tx, cmd, n);
+  uint32_t t = micros();
+  while (digitalRead(P_LORA_BUSY)) if (micros() - t > 100000) { Serial.println("spifree st=-2 us=0"); return; }
+  SPI.beginTransaction(SPISettings(2000000, MSBFIRST, SPI_MODE0));
+  digitalWrite(P_LORA_NSS, LOW);
+  SPI.transfer(tx, nullptr, n);
+  digitalWrite(P_LORA_NSS, HIGH);
+  SPI.endTransaction();
+  SPI.end();
+  pinMode(P_LORA_NSS, spifreePulls ? INPUT_PULLUP : INPUT);
+  pinMode(P_LORA_SCLK, spifreePulls ? INPUT_PULLDOWN : INPUT);
+  pinMode(P_LORA_MOSI, spifreePulls ? INPUT_PULLDOWN : INPUT);
+  pinMode(P_LORA_MISO, INPUT);       // reconnect its input buffer so MISO can be watched
+  int st = 0;
+  uint32_t t0 = micros();
+  while (!digitalRead(P_LORA_BUSY)) if (micros() - t0 > 5000) { st = -1; break; }
+  uint32_t t1 = micros(), tm = millis();
+  // Watch the released pins while the chip runs: samples, NSS low, SCK edges, MOSI high
+  uint32_t ns = 0, nssLow = 0, sckEdges = 0, mosiHigh = 0, sckHigh = 0, misoHigh = 0, nssHigh = 0;
+  int lastSck = digitalRead(P_LORA_SCLK);
+  memset(sfMosi, 0, sizeof(sfMosi)); memset(sfMiso, 0, sizeof(sfMiso)); sfBits = 0;
+  if (st == 0) while (digitalRead(P_LORA_BUSY)) {
+    if (millis() - tm > 3000) { st = -2; break; }
+    int sck = digitalRead(P_LORA_SCLK);
+    ns++;
+    nssLow += !digitalRead(P_LORA_NSS);
+    sckEdges += sck != lastSck;
+    mosiHigh += digitalRead(P_LORA_MOSI);
+    sckHigh += sck;
+    misoHigh += digitalRead(P_LORA_MISO);
+    sfEdge(sck, lastSck);
+    lastSck = sck;
+  }
+  if (st == 0) while (millis() - tm < spifreeMinMs) {    // the chip may drop BUSY itself mid-command
+    int sck = digitalRead(P_LORA_SCLK);
+    ns++;
+    nssLow += !digitalRead(P_LORA_NSS);
+    sckEdges += sck != lastSck;
+    mosiHigh += digitalRead(P_LORA_MOSI);
+    sckHigh += sck;
+    misoHigh += digitalRead(P_LORA_MISO);
+    sfEdge(sck, lastSck);
+    lastSck = sck;
+  }
+  uint32_t us = micros() - t1;
+  digitalWrite(P_LORA_NSS, HIGH);
+  pinMode(P_LORA_NSS, OUTPUT);
+  digitalWrite(P_LORA_NSS, HIGH);
+  SPI.setPins(P_LORA_MISO, P_LORA_SCLK, P_LORA_MOSI);
+  SPI.begin();
+  Serial.printf("spifree st=%d us=%lu samples=%lu nss_low=%lu sck_edges=%lu mosi_high=%lu sck_high=%lu miso_high=%lu\n",
+                st, (unsigned long)us, (unsigned long)ns, (unsigned long)nssLow, (unsigned long)sckEdges, (unsigned long)mosiHigh,
+                (unsigned long)sckHigh, (unsigned long)misoHigh);
+  Serial.printf("spifree bits=%lu mosi=", (unsigned long)sfBits);
+  for (uint32_t i = 0; i < (sfBits + 7) / 8; i++) Serial.printf("%02X", sfMosi[i]);
+  Serial.print(" miso=");
+  for (uint32_t i = 0; i < (sfBits + 7) / 8; i++) Serial.printf("%02X", sfMiso[i]);
+  Serial.print("\n");
+}
+
 static int hexval(char c) {
   if (c >= '0' && c <= '9') return c - '0';
   if (c >= 'a' && c <= 'f') return c - 'a' + 10;
@@ -429,6 +510,25 @@ static bool handleRadio(const char* cmd) {
   if (!strncmp(cmd, "scanwait ", 9)) {
     stopRx();
     scanwait(strtoul(cmd + 9, NULL, 0));
+    return true;
+  }
+  if (!strncmp(cmd, "spifree ", 8)) {
+    static uint8_t buf[64];
+    size_t n = 0;
+    const char* p0 = cmd + 8;
+    spifreePulls = strncmp(p0, "np ", 3) != 0;
+    if (!spifreePulls) p0 += 3;
+    spifreeMinMs = 0;
+    if (*p0 == 'w') { char* q; spifreeMinMs = strtoul(p0 + 1, &q, 10); p0 = q; }
+    for (const char* p = p0; *p && n < sizeof(buf);) {
+      char* q;
+      unsigned long b = strtoul(p, &q, 16);
+      if (q == p) break;
+      buf[n++] = (uint8_t)b;
+      p = q;
+    }
+    stopRx();
+    spifree(buf, n);
     return true;
   }
   if (!strcmp(cmd, "rxread")) {

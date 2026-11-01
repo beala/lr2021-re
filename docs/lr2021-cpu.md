@@ -175,6 +175,10 @@ More ROM functions: [rom-functions.md](rom-functions.md).
 
 ## Working alongside the radio hardware [HW]
 
+- **Transmitting:** the CPU can't write the TX FIFO directly, but can clock WriteTxFifo into the
+  chip's own SPI slave through the SPI pads, or play LoRa chirps through the synthesizer
+  ([pram-lora-tx.md](pram-lora-tx.md)).
+
 - **DMA and CPU run in parallel.** The capture DMA keeps filling RAM while our code holds the
   CPU, so a command can start a capture, compute on something else and collect it later.
   This is what makes the overlapped waterfall work.

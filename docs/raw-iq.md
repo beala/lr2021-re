@@ -254,7 +254,7 @@ WriteTxFifo appear at the base in 0xF3002C (0x804000). But:
   then an unmodulated carrier for the rest of the burst (FIFO flags 0x27, underflow), then TX done.
 - The FIFO pointers aren't visible: 0xF30000–0xF3007C read back 0 over ReadRegMem32. ClearTxFifo
   only sets 0xF3001C bit 3, and the SPI block writes the FIFO in hardware (WriteTxFifo isn't in
-  the CPU's command table). No CPU-side FIFO data port was found, so PRAM code can't feed it either.
+  the CPU's command table). No CPU-side FIFO data port was found. PRAM code can still feed it by clocking WriteTxFifo into the chip's own SPI slave through the SPI pads ([pram-lora-tx.md](pram-lora-tx.md)).
 
 So there is no "play this RAM buffer" mode: something has to keep the FIFO topped up. What the
 frequency modes change is how little that takes, because one byte is one sample.

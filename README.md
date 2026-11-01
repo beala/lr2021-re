@@ -80,6 +80,7 @@ which has no location set.
 | [docs/ranging.md](docs/ranging.md) | RTToF ranging between the two boards with raw commands; the PRAM patch fixes the ranging RSSI |
 | [docs/pram-scanner.md](docs/pram-scanner.md) | Multi-channel LoRa receiver on the chip: CAD hopping over up to 32 channels from PRAM, in the background from the ROM's state handler slot with RxDone to the host; 28 channels at MeshCore's SF7 preamble with nothing missed once CAD triggers only on preamble symbols; the ROM event loop |
 | [docs/pram-pll.md](docs/pram-pll.md) | FM generated on the chip by writing the synthesizer word (0xF40144) during CW: flat to 100 kHz, on-chip AFSK APRS that decodes |
+| [docs/pram-lora-tx.md](docs/pram-lora-tx.md) | The CPU can't write the TX FIFO directly, but it can clock WriteTxFifo into its own SPI slave through the SPI pads (pulls only, MCU pins released) and the hardware modem sends it; or encode LoRa itself and play the chirps through the synthesizer. Both decode on another LR2021 with CRC good |
 | [docs/pram-demod.md](docs/pram-demod.md) | APRS demodulated on the chip in the background: the CPU reads the raw-I/Q FIFO by moving it between two buffers, an IRQ 42 handler of our own does the work, RxDone on the IRQ line per frame |
 | [docs/lora-detection.md](docs/lora-detection.md) | Undocumented LoRa sync/detection commands (raw sync word 0x022D, 0x021F, 0x0226); the sync word barely filters |
 | [docs/dualband-bench.md](docs/dualband-bench.md) | 908 MHz / 2478 MHz dual-band CAD scanning: switch time, catch rates |
@@ -137,6 +138,12 @@ Data tables:
 - **The chip makes its own FM:** PRAM code writing the synthesizer word during a CW carrier moves it
   within ~2 µs; FM response is flat to 100 kHz. An on-chip AFSK generator sends APRS frames that
   an RTL-SDR decodes, with nothing streamed from the host ([pram-pll.md](docs/pram-pll.md)).
+- **The chip can transmit packets it built itself.** The CPU can't write the TX FIFO directly (its
+  fill level is counted by the SPI block), but a PRAM blob can clock WriteTxFifo into the chip's
+  own SPI slave by toggling the SPI pads' pull-ups and pull-downs while the MCU leaves its pins
+  floating; the modem then sends the packet. Or the blob encodes LoRa itself and plays the chirps
+  through the synthesizer, 64 cycles per update, exact to the cycle per symbol. Both decode on
+  another LR2021 with CRC good, up to 255 bytes for the synthesizer path ([pram-lora-tx.md](docs/pram-lora-tx.md)).
 - **The chip demodulates too:** a PRAM blob decodes APRS (AFSK 1200) from the radio's raw I/Q in
   the background, taking over the FIFO interrupt through a copied vector table, and raises RxDone
   for each good frame, like a built-in modem. 20/20 frames on each board, no FIFO overruns in 42 s

@@ -81,7 +81,7 @@ PRAM is full: the 2240 B patch plus the 1840 B JLI table leave about 16 B free. 
 | 0xF30004 | bits 3/4 | RX FIFO full / overflow flags, write 1 to clear (the ROM clears with 0x3918) | [HW] |
 | 0xF30008 | | FIFO flags that interrupt the CPU (IRQ 42); 0x10000 after boot | [HW] |
 | 0xF30010 | | 0xF30004 & 0xF30008: the status the IRQ 42 handler (0x78C4) reads | [HW] |
-| 0xF3003C | | reads 0; a write doesn't move the RX FIFO read pointer | [HW] |
+| 0xF3003C | | TX FIFO: bytes written to RAM since the last clear (the TX twin of 0xF30038). Read-only; it doesn't move the RX FIFO read pointer either | [HW] |
 | 0xF2A0AC / 0xF2A0B0 | [10:0] | RX / TX FIFO level (GetRxFifoLevel / GetTxFifoLevel) | [HW]/[RE] |
 | 0xF2A004 / 0xF2A094 / 0xF2A098 / 0xF2A09C | | FIFO IRQ enables, routing and thresholds (ConfigFifoIrq); host DIO only, no CPU interrupt reads this block | [RE] |
 | 0xF2A008 / 0xF2A00C | | raise host IRQs (0x6ADC) / host IRQ status | [RE] |
@@ -110,7 +110,12 @@ PRAM is full: the 2240 B patch plus the 1840 B JLI table leave about 16 B free. 
 | 0xF2A00C | | IRQ status (ClearIrq / GetAndClearIrqStatus) | [RE] |
 | 0xF2F020 | [15:8], [0] | test-bus selector, enable (0x012F, [test-bus.md](test-bus.md)) | [HW] |
 | 0xF02004 + 4·i | [1], [2], [5:4] | pad i (= DIOi, i = 0..12): output enable, input enable, pull | [RE] |
-| 0xF26004 + 4·i | [4:0] | pad i mux: 0 none/LF clk, 1 GPIO/RF switch, 0xA test bus, 0xB HF clk, 0x10 IRQ | [RE] |
+| 0xF26004 + 4·i | [4:0] | pad i mux: 0 none/LF clk, 1 GPIO/RF switch, 0xA test bus, 0xB HF clk, 0x10 IRQ; pads 0–4 boot as 2–6 (SPI and BUSY) | [RE] |
+| pads 1 / 2 / 3 / 4 | | NSS / SCK / MOSI / BUSY (each driven by the chip while the MCU watched). Pull codes (cfg bits 5:4): 2 up, 1 down | [HW] |
+| 0xF23058 / 0xF2305C | | GPIO set / clear: write 1 << pad (SetDioFunction codes 6 / 5); for pads with mux 1 and output enable | [HW] |
+| 0xF23054 | | GPIO output latch (reads back the set/clear writes) | [HW] |
+| 0xF0203C | | pad input levels, bit i = pad i (ROM 0x7C96). Read 0 for the SPI pads in every test | [RE] |
+| 0xF24004 | bit 31 / bit 25 | written 0x80000000 by the main loop before it sleeps (BUSY low), 0x02000000 by the SPI command interrupt (0x7686) | [RE] |
 
 The full list of registers each command touches is in `analysis/register_fingerprints.txt`.
 
