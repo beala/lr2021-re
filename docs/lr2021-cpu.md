@@ -188,6 +188,29 @@ More ROM functions: [rom-functions.md](rom-functions.md).
 - **RSSI lags a retune:** at 62.5 kHz bandwidth, ~1.4 ms after SetRfFrequency before the
   instant RSSI reflects the new frequency.
 
+### Long commands and the ROM event loop [HW]
+
+Hardware runs on while a command holds the CPU, but whatever the ROM finishes in software waits.
+A PRAM command that started CAD and polled for CadDone never saw it; the flag appeared as soon as
+the command returned.
+
+- Commands don't run in an interrupt: inside one, AUX_IRQ_ACT (aux 0x43) reads 0 and STATUS32
+  0x80000608 (interrupts enabled).
+- The ROM main loop (0xA1AC), with interrupts off, takes the pending-event word at gp+0x44
+  (gp = 0x806000, filled by interrupt handlers) and clears it. Bit 0 runs host commands (0x23F4);
+  the other bits go to the current state handler, a function pointer at gp+0x34 (e.g. 0x8074 for
+  LoRa CAD). That handler raises host IRQs through 0x6ADC (masked by [0x80060C], written to
+  0xF2A008) and picks the radio's next state. Then the loop calls [gp+0x38](256) if event bit 14
+  is left, ORs the remaining bits into gp+0x6C, refreshes the host status (0x25A4, registers
+  0xF24040/44) and sleeps when idle.
+- The IRQ status the host reads is 0xF2A00C (GetAndClearIrqStatus reads it and writes the value
+  back to clear; ClearIrq writes the mask).
+- **To wait for a radio event inside a command, run that dispatch yourself:** take gp+0x44 with
+  interrupts off (`clri`/`seti`), put bit 0 back, call the state handler with the rest, then do the
+  bit-14 callback, the gp+0x6C OR and 0x25A4. `yield()` in `firmware/pram/scan.c` does this; with
+  it, CAD and the CAD-to-RX transition work under a command
+  ([pram-scanner.md](pram-scanner.md)).
+
 ## Toolchain
 
 `firmware/pram/build.sh` uses a patched ARC GCC 13.3 in Docker (`docker/Dockerfile.gcc`,

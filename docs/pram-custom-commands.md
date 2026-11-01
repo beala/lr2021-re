@@ -6,6 +6,9 @@ blob with the right header becomes a set of new host commands, reached through A
 (0x012D). Source: `firmware/pram/` (`sweep.S`: header, entry table, sweep; `fft.c`: FFT;
 `bench.S`: CPU benchmarks). Host tool: `tools/pram.py`.
 
+A second blob, `scan.bin`, turns the chip into a multi-channel LoRa receiver: see
+[pram-scanner.md](pram-scanner.md).
+
 This page covers the commands themselves. **How the CPU and PRAM work** is in
 [lr2021-cpu.md](lr2021-cpu.md): the blob format and calling convention, registers, timing,
 memory, the DMA rules, the toolchain and the GCC patch, and what hangs the chip.

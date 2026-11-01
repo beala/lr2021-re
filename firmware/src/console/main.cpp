@@ -11,6 +11,7 @@
 //   get tx / set tx <dBm>           TX power (LR2021 drive level, -9..22)
 //   loratx <hex>                    send one LoRa packet (explicit header, CRC on, 16-symbol preamble)
 //   rxstats                         hardware RX counters
+//   rxread                          read the packet in the RX FIFO (after a raw RX, e.g. tools/scan.py)
 //   pinmon <ms> / pinsnap <n>       XIAO only: watch the pads wired to the MCU (docs/test-bus.md)
 //   wfrun <nseg> [frames] [ov]      stream the on-chip spectrum (PRAM entry 9) as binary frames until x;
 //                                   ov = 1: overlap the next capture with the FFT (nseg 1)
@@ -330,6 +331,21 @@ static bool handleRadio(const char* cmd) {
     if (ov && nseg != 1) { Serial.println("  -> ERR ov needs nseg 1"); return true; }
     stopRx();
     wfrun(nseg, frames, ov != 0);
+    return true;
+  }
+  if (!strcmp(cmd, "rxread")) {
+    // Read the packet a raw command sequence left in the RX FIFO (e.g. after a PRAM CAD scan),
+    // without touching the receiver state. "rc" can't do this: the FIFO data must follow the
+    // opcode in the same SPI transfer.
+    static uint8_t buf[256];
+    size_t len = radio.getPacketLength();
+    if (len > sizeof(buf)) len = sizeof(buf);
+    uint8_t ps[10] = { 0 };
+    radio.rawCmd(RADIOLIB_LR2021_CMD_GET_LORA_PACKET_STATUS, NULL, 0, ps, sizeof(ps));
+    int16_t st = radio.readData(buf, len);
+    Serial.printf("  -> > len=%u st=%d snr=%.2f rssi=%.1f data=", (unsigned)len, st, radio.getSNR(), radio.getRSSI());
+    for (size_t i = 0; i < len; i++) Serial.printf("%02X", buf[i]);
+    Serial.print("\r\n");
     return true;
   }
   if (!strcmp(cmd, "rxstats")) {
