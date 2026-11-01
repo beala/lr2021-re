@@ -216,6 +216,10 @@ the command returned.
   back after any ROM call that replaces it. The background channel scanner runs this way
   ([pram-scanner.md](pram-scanner.md#background-mode-hw)). The ROM's event bits seen set by its
   interrupt handlers are 0, 1, 6, 13, 14, 18 and 22–25.
+- **BUSY drops only when the main loop goes idle.** Right before its sleep instruction the loop
+  writes 0x80000000 to 0xF24004 (only after it has done work). A blob that kept setting an event
+  bit, so the loop never went idle, held BUSY high: its own start command never returned (host
+  −705).
 - There's no CPU timer: TIMER_BUILD (aux 0x75) reads 0 and reading COUNT0 (aux 0x21) hangs the
   chip. The radio's RX timeout is a channel of a 32.768 kHz timer block: 0xC7F4(ticks) arms it,
   0xC828 stops it (armed flag at gp+12), 0xC84C(ticks) reloads it.

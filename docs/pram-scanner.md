@@ -151,11 +151,16 @@ packets.
 | 16 | 50/50 | 50/50 |
 | 20 | 39/40, 48/50 | 36/40 (a stall, below), 40/40, 40/40, 40/40, 45/50 |
 
-- **A hop costs about 0.1 ms more than under a command:** 4.29 ms per two-symbol CAD (4.10 ms of
-  air) against 4.17 ms, measured from the host over 5 s with no traffic. The main loop goes to sleep
-  and wakes up between steps. A 20-channel pass then takes ~49 ms of the 65 ms preamble, and that
-  shows: 20 channels is 97% here (252/260, leaving out the stalled run) against 99% for the
-  command, while 16 channels and below catch everything.
+- **A hop costs the same as under a command.** Measured in one session, 8 channels, no traffic,
+  two-symbol CAD (4.10 ms of air): 4.27 ms per hop in the background (2000 hops timed by the chip
+  raising its IRQ line at the end), 4.43 ms under the command (long minus short commands, timed
+  from the host). The earlier 4.17 ms for the command came from a different method.
+- **Sleeping between hops costs nothing measurable:** a test build that kept the main loop from
+  going idle also took 4.27 ms per hop. It isn't usable anyway: BUSY only drops when the main loop
+  goes idle (see below), so the host can't send a command to a chip that never sleeps.
+- **20 channels: 97% in the background (252/260, leaving out the stalled run) against 100/100 for
+  the command in the same session** (and 89/90 earlier). The hop time doesn't explain the gap; the
+  cause isn't known yet. 16 channels and below catch everything in both modes.
 - No false frames, and false alarms are handled on the chip as before (~1% of CADs).
 
 ### Leaving RX: the stall and the watchdog
