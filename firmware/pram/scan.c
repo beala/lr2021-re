@@ -11,7 +11,10 @@
 //   16 at SF9+); a mismatch gives header CRC errors.
 //
 // Entry 1 params (big-endian): n (1), cad symbols (1), exit mode (1: 0 = fallback, 1 = RX),
-//   symbols to wait for a preamble after a detection (1), 0 (2), rounds (2). The wait is converted
+//   symbols to wait for a preamble after a detection (1), CAD flags (1), 0 (1), rounds (2).
+//   CAD flags is byte 1 of SetLoraCadParams: bit 4 pbl_any (1 = detect only preamble symbols),
+//   bits 3:0 pnr_delta (8 = fast CAD: end early when nothing is there). With bit 4 set, false
+//   alarms all but vanish (docs/pram-scanner.md#cad-settings-hw). The wait is converted
 //   per channel into RX-timeout ticks (32.768 kHz) from that channel's SF and bandwidth, so a slow
 //   SF gets enough time and a false alarm on a fast one costs little.
 // Response (8 bytes): channel index or 0xFF, round (2), CADs run (2), false alarms (1), polls of
@@ -99,7 +102,7 @@ int scan_cmd(u32 len, const u8 *p, struct resp *r) {
   u32 rounds = (p[6] << 8) | p[7];
   if (n == 0 || n > 32 || rounds == 0) return 1;
   u32 wsym = p[3];
-  u8 cadp[7] = { (u8)nsym, 0, (u8)exitm, 0, 0, 0, 0 };
+  u8 cadp[7] = { (u8)nsym, p[4], (u8)exitm, 0, 0, 0, 0 };
   u8 fb[4], mod[2], pkt[4] = { 0, 0, 0, 0x02 };   // explicit header, CRC on, standard IQ
   u32 last_pre = 0x100, last_mod = 0xFFFFFFFFu, last_peak = 0x100, cads = 0, polls = 0, hit = 0xFF, rnd = 0, falses = 0;
   for (rnd = 0; rnd < rounds && hit == 0xFF; rnd++) {
@@ -279,7 +282,7 @@ static void bg_resp(struct bgs *b, struct resp *r) {
 }
 
 // 4: background scan. Params: op (1), then for op 1: n (1), cad symbols (1), symbols to wait for
-// a preamble after a detection (1).
+// a preamble after a detection (1), optional CAD flags (1, as for entry 1).
 //   op 1  start: scan the table from channel 0 and return at once (exit mode RX)
 //   op 3  resume after a packet: clear RxDone / CrcError (the host has read the packet) and
 //         carry on from the next channel
@@ -300,6 +303,7 @@ int bg_cmd(u32 len, const u8 *p, struct resp *r) {
     b->n = p[1]; b->wsym = p[3]; b->c = 0;
     for (u32 i = 0; i < 8; i++) b->cadp[i] = 0;
     b->cadp[0] = p[2]; b->cadp[2] = 1; // exit mode RX
+    if (len >= 5) b->cadp[1] = p[4];   // pbl_any << 4 | pnr_delta
     b->last_mod = 0xFFFFFFFFu; b->last_pre = b->last_peak = 0x100;
     b->cads = b->falses = b->hdr_err = b->hits = b->rounds = b->events = b->lost_irq = 0;
     b->last_hit = 0xFF;

@@ -35,7 +35,14 @@ BLOB = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'firmware'
 TAB = 0x807800                       # channel table in free RAM (docs/lr2021-cpu.md#memory)
 MAX_CH = 32
 BW_CODE = {31.25: 2, 62.5: 3, 125: 4, 250: 5, 500: 6}
-PEAK = {5: 56, 6: 56, 7: 56, 8: 58, 9: 58, 10: 60, 11: 64, 12: 68}   # datasheet CAD detect peaks
+# Datasheet CAD detect peaks per CAD length (symbols) and SF
+PEAKS = {1: {5: 60, 6: 60, 7: 60, 8: 64, 9: 64, 10: 66, 11: 70, 12: 74},
+         2: {5: 56, 6: 56, 7: 56, 8: 58, 9: 58, 10: 60, 11: 64, 12: 68},
+         3: {5: 51, 6: 51, 7: 52, 8: 54, 9: 56, 10: 60, 11: 60, 12: 65},
+         4: {5: 51, 6: 51, 7: 51, 8: 54, 9: 56, 10: 60, 11: 60, 12: 64}}
+# CAD flags, byte 1 of SetLoraCadParams: bit 4 pbl_any (detect only preamble symbols), bits 3:0
+# pnr_delta (8 = fast CAD, ends early when nothing is there)
+CAD_PREAMBLE_ONLY, CAD_FAST = 0x10, 0x08
 IRQ_PRE, IRQ_HDR, IRQ_CADDET, IRQ_HDR_CRC = 1 << 5, 1 << 6, 1 << 7, 1 << 9
 IRQ_RXDONE, IRQ_TXDONE, IRQ_CADDONE, IRQ_TO, IRQ_CRC = 1 << 18, 1 << 19, 1 << 20, 1 << 21, 1 << 22
 SCAN_IRQS = IRQ_PRE | IRQ_HDR | IRQ_CADDET | IRQ_RXDONE | IRQ_CADDONE | IRQ_TO | IRQ_CRC | IRQ_HDR_CRC
@@ -79,7 +86,7 @@ def console_init(c, mhz, bw, sf, dbm=-9):
     c.cmd('hold on', 'hold st')
 
 
-def setup_scanner(c, name, chans):
+def setup_scanner(c, name, chans, cad_sym=1):
     """Reset the radio, load the blob, write the channel table."""
     f0, sf0, bw0 = chans[0]
     console_init(c, f0, bw0, sf0)                    # set radio resets the chip (and clears PRAM)
@@ -91,7 +98,7 @@ def setup_scanner(c, name, chans):
     for i, (f, sf, bw) in enumerate(chans):
         ldro = 1 if (2 ** sf) / (bw * 1e3) > 16e-3 else 0
         pre = 32 if sf <= 8 else 16
-        word1 = ((sf << 4) | BW_CODE[bw]) | ((1 << 4 | ldro) << 8) | (PEAK[sf] << 16) | (pre << 24)
+        word1 = ((sf << 4) | BW_CODE[bw]) | ((1 << 4 | ldro) << 8) | (PEAKS[cad_sym][sf] << 16) | (pre << 24)
         for addr, val in ((TAB + 8 * i, int(round(f * 1e6))), (TAB + 8 * i + 4, word1)):
             if 'mw st=0' not in c.cmd(f'mw {addr:X} {val:X}', 'mw st'):
                 raise RuntimeError('channel table write failed')
@@ -105,8 +112,8 @@ def scan_rounds(chans, cad_sym, budget_ms=600):
     return max(1, int(budget_ms / cycle))
 
 
-def scan_start(c, n, rounds, cad_sym=1, wait_sym=8):
-    p = bytes([1, n, cad_sym, 1, wait_sym, 0, 0, rounds >> 8, rounds & 0xFF])
+def scan_start(c, n, rounds, cad_sym=1, wait_sym=8, cad_flags=0):
+    p = bytes([1, n, cad_sym, 1, wait_sym, cad_flags, 0, rounds >> 8, rounds & 0xFF])
     c.s.reset_input_buffer()
     c.s.write(('rc 012D 8 ' + ' '.join(f'{b:02X}' for b in p) + '\r').encode())
 
@@ -156,11 +163,11 @@ def bg(c, op, extra=b''):
     return d
 
 
-def bg_start(c, name, chans, cad_sym, wait_sym):
+def bg_start(c, name, chans, cad_sym, wait_sym, cad_flags=0):
     ok(c, 0x0128, b'\0')
     ok(c, 0x0115, bytes([IRQ_DIO[name]]) + be32(IRQ_RXDONE))    # only RxDone wakes the MCU
     irq(c)
-    return bg(c, 1, bytes([len(chans), cad_sym, wait_sym]))
+    return bg(c, 1, bytes([len(chans), cad_sym, wait_sym, cad_flags]))
 
 
 def bg_stop(c):
@@ -202,7 +209,7 @@ def cmd_listen(args):
     chans = parse_channels(args.ch, args.sf, args.bw)
     name = args.board
     c = pram.Console(ports()[name])
-    setup_scanner(c, name, chans)
+    setup_scanner(c, name, chans, args.cad_sym)
     if not args.blocking:
         return listen_bg(c, name, chans, args)
     rounds = scan_rounds(chans, args.cad_sym)
@@ -212,7 +219,7 @@ def cmd_listen(args):
     try:
         while t_end is None or time.time() < t_end:
             irq(c)
-            scan_start(c, len(chans), rounds, args.cad_sym, args.wait_sym)
+            scan_start(c, len(chans), rounds, args.cad_sym, args.wait_sym, args.cad_flags)
             r = scan_result(c)
             n_cmd += 1
             n_false += r['falses']
@@ -236,7 +243,7 @@ def cmd_listen(args):
 
 def listen_bg(c, name, chans, args):
     secs = args.seconds or 3600
-    bg_start(c, name, chans, args.cad_sym, args.wait_sym)
+    bg_start(c, name, chans, args.cad_sym, args.wait_sym, args.cad_flags)
     print(f'scanning {len(chans)} channels in the background for {secs:.0f} s; the MCU waits for RxDone')
 
     def show(p):
@@ -260,7 +267,7 @@ def bench_bg(sc, tx, rx_name, chans, args):
         plan.append((k, f'scan {trial:03d} ch{k:02d}'.encode(), random.uniform(0, 0.15)))
     period = 0.45
     got, res = [], {}
-    bg_start(sc, rx_name, chans, args.cad_sym, args.wait_sym)
+    bg_start(sc, rx_name, chans, args.cad_sym, args.wait_sym, args.cad_flags)
     t_start = time.time()
     th = threading.Thread(target=lambda: res.setdefault('line', scanwait(sc, 0, got.append)))
     try:
@@ -296,6 +303,9 @@ def bench_bg(sc, tx, rx_name, chans, args):
     print(bg_summary(s, secs))
     print(f'{len(chans)} channels, CAD {args.cad_sym} symbol(s), background: {good}/{len(plan)} packets caught on the '
           f'right channel and decoded, {len(other)} other')
+    if got:
+        r = sorted(p['rssi'] for p in got)
+        print(f'RSSI {r[0]:.0f} to {r[-1]:.0f} dBm (median {r[len(r) // 2]:.0f}), CAD flags {args.cad_flags:#04x}')
     missed = [(k, payload.decode()) for k, payload, _ in plan
               if not any(p['data'] == payload and p['ch'] == k and p['st'] == 0 for p in got)]
     if missed:
@@ -308,7 +318,7 @@ def cmd_bench(args):
     rx_name = args.board
     tx_name = 'xiao' if rx_name == 'nicerf' else 'nicerf'
     sc, tx = pram.Console(p[rx_name]), pram.Console(p[tx_name])
-    setup_scanner(sc, rx_name, chans)
+    setup_scanner(sc, rx_name, chans, args.cad_sym)
     console_init(tx, chans[0][0], args.bw, args.sf)
     if not args.blocking:
         return bench_bg(sc, tx, rx_name, chans, args)
@@ -329,7 +339,7 @@ def cmd_bench(args):
             irq(tx)
             ok(sc, 0x0128, b'\0')
             irq(sc)
-            scan_start(sc, len(chans), rounds, args.cad_sym, args.wait_sym)
+            scan_start(sc, len(chans), rounds, args.cad_sym, args.wait_sym, args.cad_flags)
             time.sleep(random.uniform(0, 0.15))      # random phase against the scan cycle
             ok(tx, 0x020D, b'\0\0\0')
             r = scan_result(sc)
@@ -356,7 +366,9 @@ def main():
     ap.add_argument('--board', default='nicerf', choices=IRQ_DIO, help='scanning board')
     ap.add_argument('--sf', type=int, default=7)
     ap.add_argument('--bw', type=float, default=62.5, choices=BW_CODE)
-    ap.add_argument('--cad-sym', type=int, default=1, help='CAD length in symbols (1 or 2)')
+    ap.add_argument('--cad-sym', type=int, default=1, choices=PEAKS, help='CAD length in symbols')
+    ap.add_argument('--cad-flags', type=lambda v: int(v, 0), default=CAD_PREAMBLE_ONLY,
+                    help='SetLoraCadParams byte 1: 0x10 preamble only (default), 0x08 fast CAD, 0x18 both, 0 neither')
     ap.add_argument('--wait-sym', type=int, default=8, help='symbols to wait for a preamble after a CAD hit')
     ap.add_argument('--verbose', action='store_true')
     ap.add_argument('--blocking', action='store_true', help='re-issued scan command (entry 1) instead of the background scan')

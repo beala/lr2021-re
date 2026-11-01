@@ -14,7 +14,7 @@ The first version (entry 1) was a command that the host had to re-issue every ~6
 ```
 python3 tools/scan.py listen --ch 902.5:906:0.5 --seconds 60       # 8 channels, SF7/62.5 kHz
 python3 tools/scan.py listen --ch 903:7,904:8,905:9,906:10         # one SF per channel
-python3 tools/scan.py bench --channels 16 --trials 50              # the other board transmits on random channels
+python3 tools/scan.py bench --channels 28 --trials 60              # the other board transmits on random channels
 python3 tools/scan.py --blocking bench --channels 20 --trials 30   # the re-issued command (entry 1)
 ```
 
@@ -126,7 +126,7 @@ next channel. The response to op 3 carries the channel the packet came in on.
 
 | Op | Params | What it does |
 |---|---|---|
-| 1 | n (1), CAD symbols (1), symbols to wait for a preamble (1) | start at channel 0 and return |
+| 1 | n (1), CAD symbols (1), symbols to wait for a preamble (1), CAD flags (1, optional) | start at channel 0 and return |
 | 3 | – | resume after a packet |
 | 2 | – | status |
 | 0 | – | stop: give the handler slot back (then send SetStandby) |
@@ -142,7 +142,8 @@ used to look for a CPU timer.
 
 Same bench as above (SF7, 62.5 kHz, 32-symbol preamble, a random channel at a random moment,
 1-symbol CAD), but one start for the whole run and nothing re-issued. The MCU wakes only for
-packets.
+packets. These runs used the first CAD settings (detect peak 56, any symbol); the settings in the
+next section reach 28 channels.
 
 | Channels | NiceRF board scanning | XIAO scanning |
 |---|---|---|
@@ -159,9 +160,57 @@ packets.
   going idle also took 4.27 ms per hop. It isn't usable anyway: BUSY only drops when the main loop
   goes idle (see below), so the host can't send a command to a chip that never sleeps.
 - **20 channels: 97% in the background (252/260, leaving out the stalled run) against 100/100 for
-  the command in the same session** (and 89/90 earlier). The hop time doesn't explain the gap; the
-  cause isn't known yet. 16 channels and below catch everything in both modes.
+  the command in the same session** (and 89/90 earlier). The hop time doesn't explain it: the
+  misses are false alarms, below. 16 channels and below catch everything in both modes.
 - No false frames, and false alarms are handled on the chip as before (~1% of CADs).
+
+## CAD settings [HW]
+
+**What the misses were.** A log of every detection (channel, outcome, CAD count) over 500
+background trials at 20 channels (493/500 caught) showed the same thing before every miss: two to
+four false alarms on other channels while the packet was on the air. Each costs ~15 ms of the 65
+ms preamble (the 8-symbol wait for a preamble that isn't there), so the scan reached the right
+channel late. Then either the CAD fired in the payload and no preamble followed, or the preamble
+was detected but the header failed. False alarms weren't caused by the packet: 0.47 per 65 ms
+window with a packet on the air, 0.45 without. Two in one window are just bad luck at ~1% per CAD.
+
+A header error after a late catch is a lost packet. A test build that stayed on the channel after a
+header error (with the watchdog re-armed) got 3 header errors in those 500 trials and saved none.
+
+**The fix is in SetLoraCadParams.** The scanner had used the datasheet's two-symbol detect peaks
+for one-symbol CAD (56 instead of 60 at SF7). Byte 1 of the command also has two fields the
+scanner left at 0: `pbl_any` (bit 4: trigger only on preamble symbols) and `pnr_delta` (bits 3:0;
+8 = fast CAD, which ends the CAD early when there's clearly nothing). 20 channels, 100 packets
+each, plus 10 s with no traffic:
+
+| CAD | Peak | Byte 1 | Hop, idle | False alarms, idle | Caught |
+|---|---|---|---|---|---|
+| 1 symbol | 56 | 0 | 2.43 ms | 1.29% | 97/100 |
+| 1 symbol | 60 | 0 | 2.36 ms | 0.81% | 100/100 |
+| 1 symbol, wait 5 symbols instead of 8 | 60 | 0 | 2.28 ms | 0.70% | **0/100**: the preamble takes longer than 5 symbols to detect |
+| 1 symbol | 60 | 0x10 (preamble only) | 2.23 ms | **0** | 100/100, no false alarm |
+| 2 symbols | 56 | 0x08 (fast) | 2.31 ms | 0.02% | 100/100 |
+| 2 symbols | 56 | 0x18 (both) | 2.24 ms | 0 | 100/100 |
+
+With preamble-only CAD the false alarms are gone: none in any run since, including the 22,500
+CADs of the two 60-packet benches at 28 channels. Fast CAD
+makes a two-symbol CAD as quick as a one-symbol one on an empty channel (2.23 ms against 4.27).
+More channels, same bench:
+
+| Channels | One pass | 1 symbol, 0x10 | 2 symbols, 0x18 |
+|---|---|---|---|
+| 24 | 54 ms | 100/100 | 100/100 |
+| 28 | 63 ms | **100/100**; 60/60 with the XIAO scanning, 60/60 more on the NiceRF board, 40/40 with the command (entry 1) | 100/100 |
+| 32 | 71 ms | 95/100 | 92/100 |
+
+So one chip covers **28 channels** at MeshCore's SF7 preamble. At 32 a pass is longer than the
+preamble, and the losses are late catches. With the first settings the command caught 26/30 at 28
+channels and 22/30 at 32.
+
+Signal level: through the dummy loads the packets arrived at −104 to −116 dBm (−116 on the NiceRF
+board, about 6 dB above the noise in 62.5 kHz). Weaker signals weren't tested, so how preamble-only
+CAD and the higher peak trade sensitivity isn't measured. `tools/scan.py` now uses the datasheet
+peak for the CAD length and preamble-only CAD by default (`--cad-flags 0` for the old behaviour).
 
 ### Leaving RX: the stall and the watchdog
 
@@ -189,6 +238,4 @@ scan re-detected the preamble each time and caught the packet at the end.
   it (`scan.py --blocking` sizes it to ~600 ms), and BUSY is high while it scans.
 - Background mode: one packet at a time. The scan stays parked until the host resumes it, as a
   single-shot RX does. To transmit, stop it (op 0, SetStandby), then restart it.
-- The CAD detect peaks are the datasheet's two-symbol values for every CAD length. Higher peaks
-  would cut false alarms with one-symbol CAD; not tuned.
 - `set radio` resets the chip and clears PRAM; reload the blob after it.
