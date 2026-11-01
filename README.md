@@ -81,6 +81,7 @@ which has no location set.
 | [docs/pram-scanner.md](docs/pram-scanner.md) | Multi-channel LoRa receiver on the chip: CAD hopping over up to 32 channels from PRAM, in the background from the ROM's state handler slot with RxDone to the host; 28 channels at MeshCore's SF7 preamble with nothing missed once CAD triggers only on preamble symbols; the ROM event loop |
 | [docs/pram-pll.md](docs/pram-pll.md) | FM generated on the chip by writing the synthesizer word (0xF40144) during CW: flat to 100 kHz, on-chip AFSK APRS that decodes |
 | [docs/pram-lora-tx.md](docs/pram-lora-tx.md) | The CPU can't write the TX FIFO directly, but it can clock WriteTxFifo into its own SPI slave through the SPI pads (pulls only, MCU pins released) and the hardware modem sends it; or encode LoRa itself and play the chirps through the synthesizer. Both decode on another LR2021 with CRC good |
+| [docs/pram-repeater.md](docs/pram-repeater.md) | A simple MeshCore repeater that runs on the LR2021 itself: receive, dedup, path edit, MeshCore's random delay, transmit through the self-written TX FIFO; 20/20 correct decisions on the bench, packets up to 255 bytes |
 | [docs/pram-demod.md](docs/pram-demod.md) | APRS demodulated on the chip in the background: the CPU reads the raw-I/Q FIFO by moving it between two buffers, an IRQ 42 handler of our own does the work, RxDone on the IRQ line per frame |
 | [docs/lora-detection.md](docs/lora-detection.md) | Undocumented LoRa sync/detection commands (raw sync word 0x022D, 0x021F, 0x0226); the sync word barely filters |
 | [docs/dualband-bench.md](docs/dualband-bench.md) | 908 MHz / 2478 MHz dual-band CAD scanning: switch time, catch rates |
@@ -144,6 +145,11 @@ Data tables:
   floating; the modem then sends the packet. Or the blob encodes LoRa itself and plays the chirps
   through the synthesizer, 64 cycles per update, exact to the cycle per symbol. Both decode on
   another LR2021 with CRC good, up to 255 bytes for the synthesizer path ([pram-lora-tx.md](docs/pram-lora-tx.md)).
+- **The chip is a MeshCore repeater by itself.** A PRAM blob receives, drops duplicates, appends or
+  strips its path hash, waits MeshCore's random delay on the radio's own timer and transmits again,
+  writing its TX FIFO through its own SPI pads. The MCU only leaves its SPI pins floating. On the
+  bench, 20 mixed packets got 20 correct decisions, and floods up to 255 bytes came back byte for
+  byte ([pram-repeater.md](docs/pram-repeater.md)).
 - **The chip demodulates too:** a PRAM blob decodes APRS (AFSK 1200) from the radio's raw I/Q in
   the background, taking over the FIFO interrupt through a copied vector table, and raises RxDone
   for each good frame, like a built-in modem. 20/20 frames on each board, no FIFO overruns in 42 s
