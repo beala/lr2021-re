@@ -95,7 +95,7 @@ these ROM functions is the original that a patch wrapper calls before or after i
 | 71 | 0x2750 | BLE | 0xF30C28[9:5] = 30 (frequency drift) |
 | 72 | 0x27B8 | BLE | 0xF30814[21:19] (2 Mbps) |
 | 130 | 0x4F28 | ? | small tweak, purpose unclear |
-| 220 | 0x8DB8 | RTToF | Reads 0xF30B74/78 and converts through 0x7E30 (likely an RSSI fix) |
+| 220 | 0x8DB8 | RTToF | Reads 0xF30B74/78 and converts through 0x7E30 (RTToF RSSI fix, [ranging.md](ranging.md)) |
 | 224 | 0x8EB8 | RTToF | 0xF30B50[26:24] |
 | 246 | 0x9FEC | RF frequency | Re-runs the DC-DC config when the frequency moves ≥ 10 MHz |
 | 267, 268 | 0xA968, 0xAAD4 | RTToF | Zeroes 0xF40144[6:0] (PLL fractional) while ranging |

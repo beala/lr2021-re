@@ -77,6 +77,7 @@ which has no location set.
 | [docs/lr2021-cpu.md](docs/lr2021-cpu.md) | **Programming the LR2021's CPU**: ARCv2 EM with 16 registers at 32.1 MHz, instruction timing, free RAM, PRAM blob format and calling convention, DMA rules, patched GCC toolchain, what hangs the chip |
 | [docs/pram-custom-commands.md](docs/pram-custom-commands.md) | Worked examples on the CPU: an on-chip spectrum sweep and a 464 frames/s FFT waterfall |
 | [docs/test-bus.md](docs/test-bus.md) | Undocumented test bus on the DIO pads (0x012F): selector map, packet flags; DIO function codes |
+| [docs/ranging.md](docs/ranging.md) | RTToF ranging between the two boards with raw commands; the PRAM patch fixes the ranging RSSI |
 | [docs/dualband-bench.md](docs/dualband-bench.md) | 908 MHz / 2478 MHz dual-band CAD scanning: switch time, catch rates |
 | [firmware/README.md](firmware/README.md) | The test firmware: console (`mr`, `mw`, `rc`, `stream`, `iqstream`, LoRa RX/TX), benches, boards |
 
@@ -105,7 +106,8 @@ Data tables:
 - **GetLoraPacketStatus returns 10 bytes, not 6.** Byte 9 is the AGC gain step (G1..G13)
   that the ROM latches during each packet. The current gain step is in 0xF30154[23:20].
 - Semtech's PRAM patch fills the 4 KB PRAM almost completely. It works by swapping 21
-  entries in a RAM copy of the ROM's 460-entry JLI jump table.
+  entries in a RAM copy of the ROM's 460-entry JLI jump table. One of its hooks fixes the
+  RTToF ranging RSSI, which reads about −24 dBm regardless of signal without it ([ranging.md](docs/ranging.md)).
 - Hidden packet type 0x0B is a raw mode. Together with 0x0290 it streams int8 IQ at
   250 kS/s through the RX FIFO, and the hardware AGC still works in this mode.
 - 0x0290 has seven capture sources: int8 and int16 IQ after the channel filter, int16 before
@@ -141,6 +143,7 @@ Hardware tools need the console firmware (see [firmware/README.md](firmware/READ
 cd firmware && pio run -e xiao_console -t upload --upload-port /dev/ttyACM0 && cd ..
 python3 tools/sc.py -p /dev/ttyACM0 "mr F30154 1" "rc 22A 10"      # read gain reg, raw packet status
 python3 -u tools/continuous_capture.py --seconds 0 --decode       # live MeshCore sniffer from raw IQ
+python3 tools/ranging.py --n 200 --sf 9                           # RTToF ranging between the two boards (TX at 908 MHz)
 ```
 
 ## Layout

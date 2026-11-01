@@ -57,7 +57,7 @@ On warm wake (retention), install only points jli_base back at 0x1018C0.
 | 414, 417 | | Clear / set bit 13 of DC-DC switcher reg 0xF20024 around ROM functions | |
 | 267, 268, 274, 275 | | RTToF: zero the low 7 bits of PLL freq 0xF40144 while ranging (packet type 4), restore after | removed `rttof_truncate_pll_freq_step` |
 | 224 | | RTToF: 0xF30B50 bits 24–26 | removed `rttof_extended_stuck_second_request` |
-| 220 | | Reads 0xF30B74/78 and converts through ROM 0x7E30 into the result (likely an RTToF RSSI fix) | |
+| 220 | | RTToF RSSI fix: reads 0xF30B74/78 and converts through ROM 0x7E30 into the result. Without it the ranging RSSI reads about −24 dBm regardless of signal ([ranging.md](ranging.md)) | |
 | 69, 71, 72 | | BLE: 0xF30C14[6:0] = 0x7C (blocking), 0xF30C28[9:5] = 30 (frequency drift), 0xF30814[21:19] (2 Mbps) | removed BLE workarounds |
 | 276 + 0x024B | | FLRC packet status gains a 24-bit field from 0xF30D3C (scaled) | |
 | 450 + 0x029A | | Z-Wave packet status reports the channel of the last packet | changelog v2.0.2 |
