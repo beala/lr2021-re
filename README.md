@@ -81,6 +81,7 @@ which has no location set.
 | [docs/pram-scanner.md](docs/pram-scanner.md) | Multi-channel LoRa receiver on the chip: CAD hopping over up to 32 channels from PRAM, in the background from the ROM's state handler slot with RxDone to the host; 28 channels at MeshCore's SF7 preamble with nothing missed once CAD triggers only on preamble symbols; the ROM event loop |
 | [docs/pram-pll.md](docs/pram-pll.md) | FM generated on the chip by writing the synthesizer word (0xF40144) during CW: flat to 100 kHz, on-chip AFSK APRS that decodes |
 | [docs/pram-lora-tx.md](docs/pram-lora-tx.md) | The CPU can't write the TX FIFO directly, but it can clock WriteTxFifo into its own SPI slave through the SPI pads (pulls only, MCU pins released) and the hardware modem sends it; or encode LoRa itself and play the chirps through the synthesizer. Both decode on another LR2021 with CRC good |
+| [docs/pram-waterfall-text.md](docs/pram-waterfall-text.md) | Any text written across frequency by the chip's own CW carrier, a 5×7 font in PRAM, readable on an RTL-SDR waterfall |
 | [docs/pram-repeater.md](docs/pram-repeater.md) | A simple MeshCore repeater that runs on the LR2021 itself: receive, dedup, path edit, TRACE, MeshCore's random delay, a TX queue, signed adverts on its own clock, transmit through the self-written TX FIFO; 20/20 correct decisions on the bench, packets up to 255 bytes; a real MeshCore companion heard its floods repeated and listed it from its advert |
 | [docs/pram-demod.md](docs/pram-demod.md) | APRS demodulated on the chip in the background: the CPU reads the raw-I/Q FIFO by moving it between two buffers, an IRQ 42 handler of our own does the work, RxDone on the IRQ line per frame |
 | [docs/lora-detection.md](docs/lora-detection.md) | Undocumented LoRa sync/detection commands (raw sync word 0x022D, 0x021F, 0x0226); the sync word barely filters |
@@ -138,7 +139,8 @@ Data tables:
   tables work too ([pram-scanner.md](docs/pram-scanner.md)).
 - **The chip makes its own FM:** PRAM code writing the synthesizer word during a CW carrier moves it
   within ~2 µs; FM response is flat to 100 kHz. An on-chip AFSK generator sends APRS frames that
-  an RTL-SDR decodes, with nothing streamed from the host ([pram-pll.md](docs/pram-pll.md)).
+  an RTL-SDR decodes, with nothing streamed from the host ([pram-pll.md](docs/pram-pll.md)). The same
+  trick writes text on an SDR waterfall from a 5×7 font in PRAM ([pram-waterfall-text.md](docs/pram-waterfall-text.md)).
 - **The chip can transmit packets it built itself.** The CPU can't write the TX FIFO directly (its
   fill level is counted by the SPI block), but a PRAM blob can clock WriteTxFifo into the chip's
   own SPI slave by toggling the SPI pads' pull-ups and pull-downs while the MCU leaves its pins
