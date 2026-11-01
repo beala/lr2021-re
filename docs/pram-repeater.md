@@ -23,7 +23,9 @@ into dummy loads. Then [with a real MeshCore companion](#with-a-real-meshcore-co
 | Flood (route 1), payload type 0–8, not seen, under the hop limit | append our hash (1–3 bytes, from the path_len hash size), hop count + 1, wait rand(0 … 5 t) with t = airtime × flood factor (MeshCore's `tx_delay_factor`, default 0.5), send |
 | Direct (route 2), first path hash is ours, not seen | remove our hash, hop count − 1, wait rand(0 … 5 t) with the direct factor (default 0.3), send |
 | Seen before | dropped. The hash covers the payload type and payload (FNV-1a here; MeshCore uses SHA-256 over the same fields), so the same packet with a longer path is a duplicate too |
-| Transport-code routes (0, 3), TRACE, other payload types, direct for someone else, bad path_len | ignored |
+| TRACE (direct, payload type 9), the next hash in its list is ours (`payload[9 + (path_len << size)]`), not seen | append our SNR × 4 (int8) to the path, wait as for direct, send. **Not yet tested on air** |
+| Due advert (see [Adverts](#adverts)) | send the stored advert |
+| Transport-code routes (0, 3), other payload types, direct for someone else, bad path_len | ignored |
 
 32 hashes are remembered. One packet waits at a time; another that needs forwarding meanwhile is
 dropped (counted as busy).
@@ -47,6 +49,34 @@ to the handler the ROM installed, then acts on the IRQ status.
    isn't the packet length afterwards (the MCU is driving the pins), the packet is dropped and
    counted as an SPI write failure.
 5. **TxDone:** back to continuous RX.
+
+## Clock and adverts
+
+**The chip keeps its own time.** The radio's timer block (0xF11000, the one the ROM's RX timeout
+uses) has a free-running 32.768 kHz counter at **0xF11014** (it advanced 32.6k per second of host
+time). Every event adds the ticks since the last one, masked to 24 bits in case the counter is
+that narrow. Idle RX is now a 60 s RX with a timeout instead of a continuous one, so an event comes
+at least once a minute; restarting costs a gap of about a millisecond. The status reports the
+uptime.
+
+### Adverts
+
+MeshCore adverts are signed with Ed25519, which the chip can't do. `mesh_rpt.py run --name NAME`:
+
+1. keeps an Ed25519 key in `~/.lr2021_repeater.key` (made on first use; `--vanity 00` searches for
+   a public key starting with 00);
+2. uses the public key's first bytes as the repeater ID, so its path hash is what companions expect;
+3. builds a repeater advert (flood, public key, current time, signature, app data `0x82` + name,
+   signed over key + time + app data) and writes it to 0x807C00;
+4. op 4 tells the chip its length, the interval (default 48 h) and when to send the first.
+
+The chip sends it when it's due and its RX window ends (within a minute), and marks it seen so
+echoes aren't forwarded again. The timestamp is fixed, so nodes that already have this advert
+ignore later copies; a fresh one needs the host to sign again.
+
+**On air:** run on the NiceRF board, the advert went out and came back 114 bytes long, one hash
+added: another MeshCore repeater nearby had re-flooded it, which it only does after checking the
+signature. The companion then listed the repeater by name.
 
 ## Results
 
@@ -90,6 +120,9 @@ longer path), with the MCU doing nothing:
 | Sleeping: the console idles in `delay()` (`mesh_rpt.py run --sleep`) | 11/11 repeated byte for byte, 9/9 correctly silent; chip counters as before, 0 SPI write failures |
 | **Off:** System OFF, USB gone, only a reset wakes it (`mesh_rpt.py run --sysoff`, console `sysoff`) | **11/11 repeated, 9/9 correctly silent** |
 
+Careful with `sysoff`: nothing drives D7 yet, so the board stays off until someone presses reset or
+replugs it. For unattended runs use `--sleep`, which the host can end over USB.
+
 So the radio needs nothing from the MCU but power and NRESET held high. On the XIAO, D7 (wired to the
 LR2021's DIO7) is the System OFF wake pin, so a future version of the blob could wake the MCU
 itself by driving DIO7 high.
@@ -98,24 +131,31 @@ itself by driving DIO7 high.
 
 | Entry | Params | What it does |
 |---|---|---|
-| 1 | op (1), then for op 1: ID (4, the first 1–3 bytes are the path hash), RX preamble (1), TX preamble (1), half-bit delay (1, cycles), SF (1), bw code (1, 3–6 = 62.5–500 kHz), CR (1, 1–4), flood factor (1, tenths), direct factor (1, tenths), hop limit (1) | op 1 start, op 2 status, op 3 inject: handle 0x807900[0..len) as if received (len (1)), op 0 stop (send SetStandby next) |
+| 1 | op (1), then for op 1: ID (4, the first 1–3 bytes are the path hash), RX preamble (1), TX preamble (1), half-bit delay (1, cycles), SF (1), bw code (1, 3–6 = 62.5–500 kHz), CR (1, 1–4), flood factor (1, tenths), direct factor (1, tenths), hop limit (1) | op 1 start, op 2 status, op 3 inject: handle 0x807900[0..len) as if received (len (1)), op 4 advert: length (1, 0 = none), interval (2, minutes), first one after (2, seconds), packet at 0x807C00, op 0 stop (send SetStandby next) |
 | 2 | – | returns `MSH1` |
 
-All ops return 16 LE words: state | waiting << 8 | hooked << 16, received, CRC errors, header
+All ops return 20 LE words: state | waiting << 8 | hooked << 16, received, CRC errors, header
 errors, floods forwarded, directs forwarded, duplicates, ignored, busy, TX done, SPI write
-failures, events, last length, length waiting, delay waiting (ticks), IRQ status.
+failures, events, last length, length waiting, delay waiting (ticks), IRQ status, uptime (s),
+adverts sent, TRACEs forwarded, last SNR × 4.
 
-RAM: 0x807800 packet to send, 0x807900 last received packet, 0x807A00 RX FIFO, 0x807E00 state,
-0x807F00 the hashes.
+RAM: 0x807800 packet to send, 0x807900 last received packet, 0x807A00 RX FIFO, 0x807C00 the stored
+advert, 0x807E00 state, 0x807F00 the hashes. `mesh.bin` is 3.3 KB of the 4 KB PRAM.
+
+**SPI pad timing differs by board.** The pulls make slow edges: a half-bit of 8 CPU cycles works on
+the XIAO, but on the NiceRF board every FIFO write failed (2 SPI write failures, nothing sent) until
+it was raised; 16 and 400 work there. `mesh_rpt.py` now uses 32 (a 255-byte write takes ~7 ms).
 
 ## Limits
 
 - **The MCU must keep its NSS, SCK and MOSI pins floating** while the chip repeats: asleep or off
   is fine (above). To use the radio itself it takes the pins back (the console's `spifree` does so when its time is up), and
   any packet the chip tries to send meanwhile is dropped, harmlessly.
-- Simple: no transport codes or regions, no TRACE, no ACK special cases, no listen-before-talk
+- Simple: no transport codes or regions, TRACE untested, no ACK special cases, no listen-before-talk
   beyond the RX wait, one packet in flight, no flood hop limits per type, no airtime budget.
-- The ID is whatever the host passes; a real repeater would use the first bytes of its public key.
+- Without `--name`, the ID is whatever the host passes; with it, the advert key's first bytes.
+- The NiceRF board ran at drive 6 (~20.5 dBm out of its PA): on USB power alone its PA browns the radio
+  out at drive ~7 and up.
 - Tested at SF7 / 62.5 kHz only: the bench with a 16-symbol preamble, the companion with
   MeshCore's 32 (`--preamble 32`; MeshCore uses 16 from SF9). The receiver's preamble must match the transmitter's
   ([commands.md](commands.md#behavior-of-documented-commands-measured-on-hardware)).

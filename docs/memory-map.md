@@ -115,6 +115,7 @@ PRAM is full: the 2240 B patch plus the 1840 B JLI table leave about 16 B free. 
 | 0xF23058 / 0xF2305C | | GPIO set / clear: write 1 << pad (SetDioFunction codes 6 / 5); for pads with mux 1 and output enable | [HW] |
 | 0xF23054 | | GPIO output latch (reads back the set/clear writes) | [HW] |
 | 0xF0203C | | pad input levels, bit i = pad i (ROM 0x7C96). Read 0 for the SPI pads in every test | [RE] |
+| 0xF11014 | | free-running 32.768 kHz counter (radio timer block 0xF11000; the RX timeout is its channel 1, reload at 0xF11028 + 4n) | [HW] |
 | 0xF24004 | bit 31 / bit 25 | written 0x80000000 by the main loop before it sleeps (BUSY low), 0x02000000 by the SPI command interrupt (0x7686) | [RE] |
 
 The full list of registers each command touches is in `analysis/register_fingerprints.txt`.

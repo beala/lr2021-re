@@ -440,7 +440,11 @@ static void sysoff() {
   pinMode(P_LORA_SCLK, INPUT);
   pinMode(P_LORA_MOSI, INPUT);
   pinMode(P_LORA_MISO, INPUT);
-  systemOff(D7, 1);
+#if defined(BOARD_XIAO_WIO_LR2021)
+  systemOff(D7, 1);                  // D7 is wired to the LR2021's DIO7
+#else
+  systemOff(P_LORA_DIO_1, 1);        // wake on the radio's IRQ line
+#endif
 }
 
 static int hexval(char c) {
