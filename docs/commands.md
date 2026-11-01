@@ -58,7 +58,8 @@ This command family was originally discovered by
 | 0x0290 | 0xF9A0 | **Reconfigure the RX data DMA**: what gets written to RAM, and where. Params `trig(1, FF = none) rate/start(u32) cfg(1) 0 0 len(u16) [fifo_enable(1)]`. `cfg` = size[7:5] \| mode[4:3] \| src[2:0]. Mode 0 = stop (gives the RAM bank back to the CPU), mode 1 = route to the RX FIFO, mode 2 = one-shot to RAM. Size 1–3 → base 0x801000 (overwrites PRAM!), 4–5 → 0x802000 (overwrites live data), 6 → 0x804000. Sources 0–6 have 2,2,4,4,4,4,2 bytes/sample (table 0x13948); what each one is: [raw-iq.md](raw-iq.md#all-capture-sources-hw). Boot default: mode 2, source 7 (packet data), base 0x804000 | [HW] partly |
 | 0x0291 | 0x5B44 | Capture write pointer (u16, relative to the base) | [HW] |
 | 0x0292 | 0x5B60 | Read captured bytes: `offset(u16) len(1)` from RAM 0x800000 + base + offset, bounded at 0x6000 | [HW] |
-| 0x0293 / 0x0294 | 0xFA78 / 0xFA18 | TX counterpart: switch the modulator input (0xF30904 bits 4/5) and packet-engine source (0xF30800 bits 10/11), with length and start time. Probably **transmit straight from a RAM buffer**. lr2021-sdr uses 0x0293 for TX | [guess] |
+| 0x0293 | 0xFA78 | **Raw TX source**: `count(u16) rate(u32) mode`. Mode 0 = int8 I/Q pairs, mode 1 = int8 frequency samples (f = v × rate/256), mode 2 = f = v × rate/128. Samples still come through the 1 KB TX FIFO; no looping or larger buffer. See [raw-iq.md](raw-iq.md#raw-tx-0x0293-and-the-tx-fifo-hw) | [HW] |
+| 0x0294 | 0xFA18 | Not TX: 3-bit fields in 0xF30044/48 and two 9-bit values (defaults 0, 511) in RX front-end register 0xF30130 | [RE] |
 
 ### Modem and packet-engine knobs
 

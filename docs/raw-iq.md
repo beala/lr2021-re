@@ -222,8 +222,65 @@ Two firmware details mattered:
 - Status-read SPI transfers must clock out zero bytes. The nRF SPIM's default over-read byte
   is 0xFF, which the radio later rejected with -706.
 
-## TX from RAM
+## Raw TX: 0x0293 and the TX FIFO [HW]
 
-0x0293 / 0x0294 switch the modulator input (0xF30904 bits 4/5) and packet-engine source
-(0xF30800 bits 10/11), with a length and start time [RE]. lr2021-sdr uses this path to
-transmit. It was not tested here.
+0x0293 is the raw-transmit switch lr2021-sdr uses. Decoded and measured here (908 MHz, −9 dBm
+drive, dummy loads, recorded on an RTL-SDR):
+
+**Params** `count(u16) rate(u32) mode(u8)`. The handler (worker 0xD1A8) sets the sample rate,
+writes the packet length into 0xF30838 (via 0xE024, with bit 17 set) and selects the source:
+
+| Mode | Source select | Packet length | Sample format (measured) |
+|---|---|---|---|
+| 0 | 0xF30800[11:10] = 2, 0xF30904[6:4] = 0 | 2 × count bytes | int8 I/Q pairs (what `iqtx` uses) |
+| 1 | 0xF30800[11:10] = 1, 0xF30904 bit 4 | count bytes | **int8 frequency: f = value × rate / 256** |
+| 2 | 0xF30800[11:10] = 1, 0xF30904 bit 5 | count bytes | **int8 frequency: f = value × rate / 128** |
+| other | | | rejected |
+
+Mode 1 is a phase increment of value/256 turns per sample, so int8 spans ±rate/2; mode 2 doubles
+that. Measured at 20 kS/s: mode 1 gave 78–80 Hz per unit (expected 78.1), mode 2 155–159 Hz
+(expected 156.3), linear from −128 to +127; at 10 kS/s both halve. The small spread is the carrier
+warming up during the burst.
+
+**The samples always come through the 1 KB TX FIFO.** It is ordinary chip RAM: bytes written with
+WriteTxFifo appear at the base in 0xF3002C (0x804000). But:
+
+- The FIFO is 1 KB whatever 0xF30034 says. Set to 8 KB, the level stops at 1024 with the overflow
+  flag, nothing past 1 KB reaches RAM, and only the first 512 pairs play.
+- When it runs dry the chip doesn't loop. A 655 ms burst prefilled with 9 ms of tone sent the tone,
+  then an unmodulated carrier for the rest of the burst (FIFO flags 0x27, underflow), then TX done.
+- The FIFO pointers aren't visible: 0xF30000–0xF3007C read back 0 over ReadRegMem32. ClearTxFifo
+  only sets 0xF3001C bit 3, and the SPI block writes the FIFO in hardware (WriteTxFifo isn't in
+  the CPU's command table). No CPU-side FIFO data port was found, so PRAM code can't feed it either.
+
+So there is no "play this RAM buffer" mode: something has to keep the FIFO topped up. What the
+frequency modes change is how little that takes, because one byte is one sample.
+
+### Frequency modes fit the narrow digital modes exactly
+
+With mode 1, the WSJT tone spacings fall out of the sample rate:
+
+| Mode | Rate | Step (rate/256) | Symbol | Samples / transmission | Host data rate |
+|---|---|---|---|---|---|
+| WSPR | 375 S/s | 1.4648 Hz (exact) | 256 samples (0.683 s, exact) | 41,472 | 375 B/s |
+| FT8 | 1600 S/s | 6.25 Hz (exact) | 256 samples (0.16 s, exact) | 20,224 | 1600 B/s |
+
+Both fit the 16-bit count, and the host only writes the tone number repeated 256 times per symbol.
+Measured:
+
+- Low rates work. 375 S/s and 1600 S/s bursts ran their exact length (2.704 s, 0.635 s), and a 9 s
+  burst at 375 S/s streamed from the host in 60-byte writes never dropped below 863 bytes in the FIFO.
+- At 1600 S/s, steps of 1–3 units measured 6.25 Hz per unit to within ~1 Hz (reference blocks in
+  between cancel the drift).
+- At 375 S/s the limit is the oscillator, not the modulator. On the NiceRF, with reference blocks
+  between 1 s test blocks, a control run with no steps read 0.6 Hz or less once warm, and steps of
+  2/3/4 units read 3.2/3.5/5.6 Hz (expected 2.9/4.4/5.9). The XIAO wandered ±5 Hz even in the control.
+  Both carriers drifted: about 25 Hz in the first 2 s of TX, then −2.5 Hz/s (NiceRF, at 908 MHz).
+  That is still too much for WSPR at 908 MHz; at 144 MHz it scales down by 6.3.
+
+### 0x0294 is not a TX command
+
+0x0294 (worker 0xD134) writes 3-bit fields at 0xF30044/0xF30048 [8:6] and [12:10] (from the two
+nibbles of p0) and two 9-bit values into 0xF30130 [8:0] and [24:16] (p1/p2 × 2 plus p3's low bits;
+defaults 0 and 511), shadowed at RAM 0x800570. 0xF30130 sits in the RX front-end block (next to
+0xF30134 DCC and 0xF3013C channel filter). Not tested.

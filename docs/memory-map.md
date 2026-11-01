@@ -81,10 +81,15 @@ PRAM is full: the 2240 B patch plus the 1840 B JLI table leave about 16 B free. 
 | 0xF30D3C | | FLRC status extra field (PRAM hook 276) | [RE] |
 | 0xF30B50 | [26:24] | RTToF (PRAM hook 224) | [RE] |
 | 0xF30B74 / 0xF30B78 | | RTToF result inputs (PRAM hook 220) | [RE] |
-| 0xF30904 | bits 4/5 | modulator input select (0x0293) | [RE] |
-| 0xF30800 | bits 10/11 | packet-engine source select (0x0293/0x0294) | [RE] |
-| 0xF30A30 | | LoRa modem register written by 0x021F | [RE] |
-| 0xF30A14, 0xF30A68, 0xF30B00, 0xF30018 | | LoRa sync/detection (0x022D/0x022E) | [RE] |
+| 0xF30904 | bits 4/5 | raw TX sample format: bit 4 = frequency (rate/256 per unit), bit 5 = frequency (rate/128) (0x0293) | [HW] |
+| 0xF30800 | bits 10/11 | packet-engine source select: 2 = I/Q pairs, 1 = one byte per sample (0x0293) | [HW] |
+| 0xF3002C / 0xF30034 | | TX FIFO base (0x804000) / size register; the FIFO stays 1 KB whatever the size says | [HW] |
+| 0xF3001C | bits 2/3 | clear RX / TX FIFO | [RE] |
+| 0xF30838 | | raw TX packet length (0x0293) | [RE] |
+| 0xF30130 | [8:0], [24:16] | two 9-bit values written by 0x0294 | [RE] |
+| 0xF30A30 | [28:16] | written by 0x021F; [27:24] acts in the LoRa payload demodulator ([lora-detection.md](lora-detection.md)) | [HW] |
+| 0xF30A68 | [12:8], [4:0] | LoRa sync word symbol values (0x0223, raw 0x022D) | [HW] |
+| 0xF30B00/04/08 | [19:15], [14:10] | side-detector sync words (0x0225, raw 0x022E) | [RE] |
 | 0xF40144 | [6:0] | PLL frequency fractional bits, zeroed while ranging (PRAM hooks 267/268) | [RE] |
 | 0xF20024 | bit 13 | DC-DC switcher control (PRAM hooks 414/417) | [RE] |
 | 0xF2A004 | | DIO output bits (0x012B) | [RE] |

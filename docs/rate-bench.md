@@ -310,7 +310,8 @@ Raw I/Q has to be turned into something the synthesizer accepts. Most likely eac
 is taken, and the change in angle from one sample to the next becomes a frequency. That is
 inferred from the measurements and the architecture, not read from the ROM. lr2021-sdr also
 found that 0x0293 accepts frequency or phase-increment samples directly, a hint that frequency
-is the native input.
+is the native input. Measured since: modes 1 and 2 take one int8 frequency per sample
+(value × rate/256 and value × rate/128; [raw-iq.md](raw-iq.md#raw-tx-0x0293-and-the-tx-fifo-hw)).
 
 - **Tone**: the angle advances by the same amount every sample, so the frequency is constant.
   The synthesizer parks there. Measured: perfect, out to ±200 kHz.
@@ -370,7 +371,10 @@ Both are constant-envelope FSK, the kind of signal this transmitter reproduces w
   phase-continuous tone sequence with `iqtx` at a low sample rate.
   - One 0x0293 burst holds at most 32,767 samples. A whole WSPR transmission therefore needs
     ≤ 296 S/s, and FT8 ≤ 2,592 S/s.
-  - lr2021-sdr measured rates from 4,800 S/s. Lower rates are listed as valid but untested.
+  - Low rates work: 375 S/s and 1600 S/s were measured. In 0x0293 mode 1 they give exactly WSPR's
+    1.4648 Hz and FT8's 6.25 Hz tone spacing, one symbol per 256 samples, and a whole WSPR
+    transmission (41,472 bytes) fits the 16-bit count. The 32,767 limit above is for I/Q pairs
+    ([raw-iq.md](raw-iq.md#raw-tx-0x0293-and-the-tx-fifo-hw)).
   - Alternative: hold a carrier and retune per symbol. The frequency command takes whole Hz,
     which is coarse next to WSPR's 1.46 Hz spacing.
 - **Frequency stability is the risk for WSPR.** It needs less than about 1 Hz of drift over

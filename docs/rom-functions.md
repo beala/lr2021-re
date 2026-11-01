@@ -66,7 +66,7 @@ The full list is in `analysis/opcode_table.txt`, and the undocumented ones are c
 | 0x57E8 | 0x022A GetLoraPacketStatus | Builds **10** response bytes from the struct at 0x8003C0. Byte 9 = struct +0xC (gain step); bytes 6–8 = struct +0xA (low byte) and +0x8 (bits 15:0) | [HW] |
 | 0xF9A0 | 0x0290 capture/DMA route | Worker at 0xCF7C; touches 0xF30044 / 0xF3004C / 0xF30050 and RAM 0x800560, 0x8060C0 | [HW] partly |
 | 0x5B44 / 0x5B60 | 0x0291 / 0x0292 | Workers 0xCE98 / 0xCED4; 0xF30054 = write pointer | [HW] |
-| 0xFA78 / 0xFA18 | 0x0293 / 0x0294 | Workers 0xD1A8 / 0xD134 | [guess] |
+| 0xFA78 / 0xFA18 | 0x0293 / 0x0294 | Workers 0xD1A8 (raw TX rate, length, sample format) / 0xD134 (RX front-end fields) | [HW] / [RE] |
 
 ## Radio internals
 
