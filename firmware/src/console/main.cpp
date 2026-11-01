@@ -17,6 +17,8 @@
 //                                   ov = 1: overlap the next capture with the FFT (nseg 1)
 //   aprswait <ms>                   print the frames the chip's background APRS receiver (PRAM demod.bin)
 //                                   decodes, waking on its RxDone IRQ
+//   scanwait <ms>                   print the packets the chip's background channel scanner (PRAM
+//                                   scan.bin entry 4) catches, waking on RxDone, and resume it
 //   help
 //
 // Receiver: while not held the chip receives LoRa with the current settings and prints one line
@@ -311,6 +313,36 @@ static void aprswait(uint32_t ms) {
   Serial.printf("aprswait done irqs %lu frames %lu%s\n", (unsigned long)irqs, (unsigned long)frames, err ? " error" : "");
 }
 
+// scanwait <ms>: the chip hops over its channel table by itself (entry 4 of
+// firmware/pram/scan.bin, started by tools/scan.py) and only RxDone is routed to the IRQ pin, so
+// the MCU idles until a packet has arrived on one of the channels. Then it reads the packet,
+// sends op 3 (resume: the chip clears RxDone and carries on scanning), and prints
+// "SCAN <ms> ch=<index> len=<n> st=<readData status> snr=<dB> rssi=<dBm> data=<hex>". Runs <ms> ms
+// (0 = until 'x'), then prints "scanwait done packets <n>"; "# scanwait <ms>" every second.
+static void scanwait(uint32_t ms) {
+  static uint8_t buf[256];
+  uint8_t rsp[40];
+  uint32_t pkts = 0, t0 = millis(), tAlive = t0;
+  bool err = false;
+  while (ms == 0 || millis() - t0 < ms) {
+    if (Serial.available() && Serial.read() == 'x') break;
+    if (millis() - tAlive >= 1000) { tAlive = millis(); Serial.printf("# scanwait %lu\n", (unsigned long)(tAlive - t0)); }
+    if (digitalRead(P_LORA_DIO_1) == LOW) { delay(1); continue; }   // idle until RxDone
+    uint32_t t = millis() - t0;
+    size_t len = radio.getPacketLength();
+    if (len > sizeof(buf)) len = sizeof(buf);
+    int16_t st = radio.readData(buf, len);
+    float snr = radio.getSNR(), rssi = radio.getRSSI();
+    uint8_t resume[4] = { 0x01, 0x2D, 4, 3 };                         // entry 4, op 3: resume
+    if (fastCmdRead(resume, sizeof(resume), rsp, sizeof(rsp), 100000) != 3) { err = true; break; }
+    pkts++;
+    Serial.printf("SCAN %lu ch=%u len=%u st=%d snr=%.2f rssi=%.1f data=", (unsigned long)t, rsp[1], (unsigned)len, st, snr, rssi);
+    for (size_t i = 0; i < len; i++) Serial.printf("%02X", buf[i]);
+    Serial.print("\n");
+  }
+  Serial.printf("scanwait done packets %lu%s\n", (unsigned long)pkts, err ? " error" : "");
+}
+
 static int hexval(char c) {
   if (c >= '0' && c <= '9') return c - '0';
   if (c >= 'a' && c <= 'f') return c - 'a' + 10;
@@ -394,6 +426,11 @@ static bool handleRadio(const char* cmd) {
     aprswait(strtoul(cmd + 9, NULL, 0));
     return true;
   }
+  if (!strncmp(cmd, "scanwait ", 9)) {
+    stopRx();
+    scanwait(strtoul(cmd + 9, NULL, 0));
+    return true;
+  }
   if (!strcmp(cmd, "rxread")) {
     // Read the packet a raw command sequence left in the RX FIFO (e.g. after a PRAM CAD scan),
     // without touching the receiver state. "rc" can't do this: the FIFO data must follow the
@@ -415,7 +452,7 @@ static bool handleRadio(const char* cmd) {
     return true;
   }
   if (!strcmp(cmd, "help")) {
-    Serial.println("# debug: mr mw rc err romprobe cap capwait stream streamdump streamstats iqstream hold wfrun aprswait");
+    Serial.println("# debug: mr mw rc err romprobe cap capwait stream streamdump streamstats iqstream hold wfrun aprswait scanwait");
     Serial.println("# radio: get radio | set radio <MHz>,<BW>,<SF>,<CR> | get tx | set tx <dBm> | loratx <hex> | rxstats");
     Serial.printf("# %s, hold %s\r\n", board.getManufacturerName(), lr2021dbg::hold ? "on" : "off");
     return true;

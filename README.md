@@ -78,12 +78,12 @@ which has no location set.
 | [docs/pram-custom-commands.md](docs/pram-custom-commands.md) | Worked examples on the CPU: an on-chip spectrum sweep and a 464 frames/s FFT waterfall |
 | [docs/test-bus.md](docs/test-bus.md) | Undocumented test bus on the DIO pads (0x012F): selector map, packet flags; DIO function codes |
 | [docs/ranging.md](docs/ranging.md) | RTToF ranging between the two boards with raw commands; the PRAM patch fixes the ranging RSSI |
-| [docs/pram-scanner.md](docs/pram-scanner.md) | Multi-channel LoRa receiver on the chip: CAD hopping over up to 32 channels from PRAM, ~20 channels at MeshCore's SF7 preamble; the ROM event loop a long command must run |
+| [docs/pram-scanner.md](docs/pram-scanner.md) | Multi-channel LoRa receiver on the chip: CAD hopping over up to 32 channels from PRAM, in the background from the ROM's state handler slot with RxDone to the host; 16 channels at MeshCore's SF7 preamble with nothing missed; the ROM event loop |
 | [docs/pram-pll.md](docs/pram-pll.md) | FM generated on the chip by writing the synthesizer word (0xF40144) during CW: flat to 100 kHz, on-chip AFSK APRS that decodes |
 | [docs/pram-demod.md](docs/pram-demod.md) | APRS demodulated on the chip in the background: the CPU reads the raw-I/Q FIFO by moving it between two buffers, an IRQ 42 handler of our own does the work, RxDone on the IRQ line per frame |
 | [docs/lora-detection.md](docs/lora-detection.md) | Undocumented LoRa sync/detection commands (raw sync word 0x022D, 0x021F, 0x0226); the sync word barely filters |
 | [docs/dualband-bench.md](docs/dualband-bench.md) | 908 MHz / 2478 MHz dual-band CAD scanning: switch time, catch rates |
-| [firmware/README.md](firmware/README.md) | The test firmware: console (`mr`, `mw`, `rc`, `stream`, `iqstream`, `wfrun`, `aprswait`, LoRa RX/TX), benches, boards |
+| [firmware/README.md](firmware/README.md) | The test firmware: console (`mr`, `mw`, `rc`, `stream`, `iqstream`, `wfrun`, `aprswait`, `scanwait`, LoRa RX/TX), benches, boards |
 
 Data tables:
 
@@ -128,10 +128,11 @@ Data tables:
   (0x012D). The CPU is an ARCv2 EM at 32.1 MHz with a 16-entry register file; a small GCC
   patch (checked against GCC's torture tests) frees a 13th register for C ([lr2021-cpu.md](docs/lr2021-cpu.md)). An on-chip sweep covers 902–928 MHz in 1,041 points in 2.2 s, and an on-chip
   capture + FFT streams a live waterfall at up to 464 frames/s (the next capture overlapped with the FFT) ([pram-custom-commands.md](docs/pram-custom-commands.md)).
-- **One chip listens to ~20 LoRa channels:** a PRAM blob hops CAD over a channel table (70 µs per
-  hop on top of the CAD), drops into RX on a real preamble and shrugs off false alarms. 89/90
-  MeshCore-style packets caught and decoded on a random one of 20 channels; mixed SF7–SF10 tables
-  work too ([pram-scanner.md](docs/pram-scanner.md)).
+- **One chip listens to 16–20 LoRa channels:** a PRAM blob hops CAD over a channel table, drops
+  into RX on a real preamble and shrugs off false alarms. It runs in the background: the blob
+  takes the ROM's radio-state handler slot, so BUSY stays low and the MCU sleeps until RxDone.
+  200/200 MeshCore-style packets caught and decoded on a random one of 12 or 16 channels, 97% at
+  20; mixed SF7–SF10 tables work too ([pram-scanner.md](docs/pram-scanner.md)).
 - **The chip makes its own FM:** PRAM code writing the synthesizer word during a CW carrier moves it
   within ~2 µs; FM response is flat to 100 kHz. An on-chip AFSK generator sends APRS frames that
   an RTL-SDR decodes, with nothing streamed from the host ([pram-pll.md](docs/pram-pll.md)).
@@ -163,7 +164,7 @@ python3 tools/sc.py -p /dev/ttyACM0 "mr F30154 1" "rc 22A 10"      # read gain r
 python3 -u tools/continuous_capture.py --seconds 0 --decode       # live MeshCore sniffer from raw IQ
 python3 tools/ranging.py --n 200 --sf 9                           # RTToF ranging between the two boards (TX at 908 MHz)
 python3 tools/lora_per.py --tx-rc 0223:42 --rx-rc 0223:12         # packet delivery with raw commands on either side (908 MHz)
-python3 tools/scan.py bench --channels 20 --trials 30             # on-chip multi-channel receiver vs the other board (902.5-910.25 MHz)
+python3 tools/scan.py bench --channels 16 --trials 50             # on-chip multi-channel receiver vs the other board (902.5-910.25 MHz)
 python3 tools/pll.py aprs --sdr                                   # APRS frame generated on the chip (908 MHz), decoded by an RTL-SDR
 python3 tools/aprs_rx.py bench --trials 20                        # APRS from one board's PLL, demodulated on the other chip
 ```

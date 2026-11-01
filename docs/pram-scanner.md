@@ -6,10 +6,16 @@ first channel with a real preamble it stays in RX, so the packet arrives like an
 can listen to many channels, or to several spreading factors, with no help from the MCU between
 packets.
 
+It runs **in the background** (entry 4, [below](#background-mode-hw)): one command starts it, the
+chip hops from its own event loop with BUSY low, and only RxDone reaches the IRQ pin. The MCU
+sleeps until a packet has arrived on one of the channels, reads it, and sends a short "resume".
+The first version (entry 1) was a command that the host had to re-issue every ~600 ms.
+
 ```
 python3 tools/scan.py listen --ch 902.5:906:0.5 --seconds 60       # 8 channels, SF7/62.5 kHz
 python3 tools/scan.py listen --ch 903:7,904:8,905:9,906:10         # one SF per channel
-python3 tools/scan.py bench --channels 20 --trials 30              # XIAO transmits on random channels
+python3 tools/scan.py bench --channels 16 --trials 50              # the other board transmits on random channels
+python3 tools/scan.py --blocking bench --channels 20 --trials 30   # the re-issued command (entry 1)
 ```
 
 `listen` prints what it receives. On a real channel that is other people's traffic, so its output
@@ -18,7 +24,8 @@ MHz, −9 dBm drive, dummy loads.
 
 ## Results
 
-The XIAO sends MeshCore-style packets (SF7, 62.5 kHz, 32-symbol preamble) on a random channel of
+These are for the re-issued command (entry 1); the background mode's are
+[below](#background-mode-hw). The XIAO sends MeshCore-style packets (SF7, 62.5 kHz, 32-symbol preamble) on a random channel of
 the table, at a random moment during the scan. A trial counts only if the scanner stops on the
 right channel and the packet arrives intact (CRC good, payload matches).
 
@@ -93,13 +100,90 @@ IRQ flags) waits for the loop. The blob's `yield()` does steps 1 and 3–4 while
 bit 0 alone. With it, CAD runs normally under the command. See
 [lr2021-cpu.md](lr2021-cpu.md#long-commands-and-the-rom-event-loop-hw).
 
+## Background mode [HW]
+
+Entry 4 runs the same scan with no command held. It uses the dispatch described above from the
+other side: instead of a command calling the ROM's state handler, the blob **becomes** the state
+handler.
+
+1. The ROM main loop gives every radio event (CAD done, preamble, RX timeout, RxDone) to the
+   function at gp+0x34. The ROM's commands set that pointer: SetLoraCad installs 0x8074, a CAD
+   detection in exit mode RX moves on to the RX handler 0x8248, and so on.
+2. Entry 4 starts the first CAD and puts its own `bg_state` in that slot, keeping the ROM's
+   handler. `bg_state` calls the ROM's handler with the events first, so the radio does exactly
+   what it would have done. Then it reads the IRQ status and takes the next step: next channel,
+   wait for a preamble, or park on a packet. After any ROM call that replaces the handler (SetLoraCad
+   does), it takes the slot back.
+3. Commands and state handlers both run from the main loop, so the scan never races a host
+   command, and between events the chip sleeps as usual. A host command such as SetStandby simply
+   replaces the handler, which stops the scan (status shows `hooked` = 0).
+
+The host routes only RxDone to its DIO (SetDioIrqConfig sets each IRQ bit's pin separately, so CAD
+done still shows in 0xF2A00C without touching the pin). The scan clears only its own flags and never
+RxDone or CrcError. On RxDone it parks: the radio is back in FS, with the packet in the FIFO. The
+console's `scanwait` reads the packet and sends op 3, which clears RxDone and carries on from the
+next channel. The response to op 3 carries the channel the packet came in on.
+
+| Op | Params | What it does |
+|---|---|---|
+| 1 | n (1), CAD symbols (1), symbols to wait for a preamble (1) | start at channel 0 and return |
+| 3 | – | resume after a packet |
+| 2 | – | status |
+| 0 | – | stop: give the handler slot back (then send SetStandby) |
+
+All four return 10 LE words: state, last hit and current channel and hooked (one byte each), CADs,
+false alarms, packets lost after a preamble, packets, passes, events seen, the IRQ status at the
+last loss, the IRQ status, the IRQ gate (0x80060C).
+
+Entry 5 reads or writes an aux register (op (1): 0 read, 1 write; register (4); value (4)). It was
+used to look for a CPU timer.
+
+### Results
+
+Same bench as above (SF7, 62.5 kHz, 32-symbol preamble, a random channel at a random moment,
+1-symbol CAD), but one start for the whole run and nothing re-issued. The MCU wakes only for
+packets.
+
+| Channels | NiceRF board scanning | XIAO scanning |
+|---|---|---|
+| 8 | 30/30 (19/20 and 28/30 before a bench fix: the last packets went out after `scanwait` had ended) | – |
+| 12 | 50/50 | 50/50 |
+| 16 | 50/50 | 50/50 |
+| 20 | 39/40, 48/50 | 36/40 (a stall, below), 40/40, 40/40, 40/40, 45/50 |
+
+- **A hop costs about 0.1 ms more than under a command:** 4.29 ms per two-symbol CAD (4.10 ms of
+  air) against 4.17 ms, measured from the host over 5 s with no traffic. The main loop goes to sleep
+  and wakes up between steps. A 20-channel pass then takes ~49 ms of the 65 ms preamble, and that
+  shows: 20 channels is 97% here (252/260, leaving out the stalled run) against 99% for the
+  command, while 16 channels and below catch everything.
+- No false frames, and false alarms are handled on the chip as before (~1% of CADs).
+
+### Leaving RX: the stall and the watchdog
+
+The first version stalled once in ~280 packets: it kept hopping until a packet, then never
+again. An aborted transmission reproduces it every time (the XIAO starts a packet on a scanned
+channel and goes to standby 30 ms into the preamble):
+
+- CAD fires, the preamble is detected (which stops the RX timeout), then **header error** (bit 9)
+  and the radio stays in RX. Starting the next CAD from RX does nothing: no CAD done ever comes,
+  and nothing else wakes the scan. The blocking version had a 2 s timeout on the host side for this.
+- Fix: leave RX with SetFs (0x0129, handler 0xEB40) before the next CAD. Three aborted packets in
+  a row now each count as lost, and the scan catches the next good packet.
+
+A preamble that never turns into a header *or* a header error would hang the same way, and there's
+no CPU timer to catch it (TIMER_BUILD, aux 0x75, reads 0; reading COUNT0 hangs the chip). The
+radio's RX timeout can do it. The ROM arms it with 0xC7F4(ticks) and stops it with 0xC828 (armed
+flag at gp+12); on a preamble 0x4C60 stops it when StopTimeoutOnPreamble is set. The scan re-arms
+it at the preamble, for the preamble length + 16 symbols, and stops it at "header valid". Checked
+with a 400-symbol (0.8 s) preamble: the watchdog fired 7 times (RX timeout, no header error), the
+scan re-detected the preamble each time and caught the packet at the end.
+
 ### Limits
 
-- The command must return within RadioLib's 1 s BUSY limit, so the host re-issues it (`scan.py`
-  sizes it to ~600 ms). From the PC over USB the gap between commands is tens of ms; an MCU talking
-  SPI directly would re-issue in well under a millisecond.
-- BUSY is high while it scans: to transmit, the MCU waits for the command to return (at most the
-  size it chose).
+- Entry 1 only: the command must return within RadioLib's 1 s BUSY limit, so the host re-issues
+  it (`scan.py --blocking` sizes it to ~600 ms), and BUSY is high while it scans.
+- Background mode: one packet at a time. The scan stays parked until the host resumes it, as a
+  single-shot RX does. To transmit, stop it (op 0, SetStandby), then restart it.
 - The CAD detect peaks are the datasheet's two-symbol values for every CAD length. Higher peaks
   would cut false alarms with one-symbol CAD; not tuned.
 - `set radio` resets the chip and clears PRAM; reload the blob after it.

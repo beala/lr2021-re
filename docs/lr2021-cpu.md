@@ -211,6 +211,14 @@ the command returned.
   bit-14 callback, the gp+0x6C OR and 0x25A4. `yield()` in `firmware/pram/scan.c` does this; with
   it, CAD and the CAD-to-RX transition work under a command
   ([pram-scanner.md](pram-scanner.md)).
+- **Or take the state handler slot instead, and no command is needed:** put your own function at
+  gp+0x34, call the handler that was there with the events, then act on the result. Take the slot
+  back after any ROM call that replaces it. The background channel scanner runs this way
+  ([pram-scanner.md](pram-scanner.md#background-mode-hw)). The ROM's event bits seen set by its
+  interrupt handlers are 0, 1, 6, 13, 14, 18 and 22–25.
+- There's no CPU timer: TIMER_BUILD (aux 0x75) reads 0 and reading COUNT0 (aux 0x21) hangs the
+  chip. The radio's RX timeout is a channel of a 32.768 kHz timer block: 0xC7F4(ticks) arms it,
+  0xC828 stops it (armed flag at gp+12), 0xC84C(ticks) reloads it.
 
 ### Interrupts [HW]/[RE]
 
@@ -228,8 +236,10 @@ the command returned.
 - Known sources: IRQ 40 (0x7A90) the RX datapath block 0xF24010; IRQ 42 (0x78C4) the FIFO/DMA
   block, status 0xF30010 = flags 0xF30004 & enable 0xF30008; IRQ 39 the synthesizer block
   0xF40010.
-- Host IRQs are raised with 0x6ADC(mask), which applies the DIO mask at 0x80060C and writes
-  0xF2A008; RxDone is bit 18.
+- Host IRQs are raised with 0x6ADC(mask), which applies the gate at 0x80060C (0xFFFF0880 from the
+  ROM's init, 0x6A6C) and writes 0xF2A008; RxDone is bit 18. The status lands in 0xF2A00C. Which
+  pin each bit drives is separate: SetDioIrqConfig (0x4A4C) writes the pin of bit n to
+  0xF2A014 + 4n and enables it in 0xF2A010.
 
 ## Toolchain
 
@@ -336,6 +346,7 @@ All of these need a chip reset (`set radio …` or `hold off` in the console).
 | Writing PRAM while a blob is active | next command −705 |
 | Reading 0x100000 or 0x102000 (holes) | bus stall |
 | Reading 0xF2A008, 0xF24040 and up, or 0xF30060–0xF3007C | bus stall, host −705 |
+| Reading aux COUNT0 (0x21): there are no ARC timers | host −705 |
 | A handler running over 1 s | RadioLib −705 (the chip is fine once it finishes) |
 | Waiting for a capture that never starts (e.g. no SetRx from FS) | command spins until its poll limit, host −705 |
 

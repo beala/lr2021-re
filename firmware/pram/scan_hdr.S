@@ -5,18 +5,20 @@
         .global _start
 _start:
         .word   0x600DB002              ; magic
-        .word   0x00000004              ; 4 entries
+        .word   0x00000006              ; 6 entries
         .word   install                 ; 0
-        .word   scan_cmd                ; 1 (scan.c)
+        .word   scan_cmd                ; 1 (scan.c): blocking scan
         .word   hello                   ; 2
         .word   cpuinfo                 ; 3
+        .word   bg_cmd                  ; 4 (scan.c): background scan
+        .word   aux_cmd                 ; 5 (scan.c): aux register read/write
         .word   0
 
 install:
         mov_s   r0, 2
         j_s     [blink]
 
-; 2: returns 'S' 'C' 'N' '1'
+; 2: returns 'S' 'C' 'N' '2'
 hello:
         ld_s    r3, [r2, 4]
         mov_s   r12, 0x53
@@ -25,7 +27,7 @@ hello:
         stb_s   r12, [r3, 1]
         mov_s   r12, 0x4E
         stb_s   r12, [r3, 2]
-        mov_s   r12, 0x31
+        mov_s   r12, 0x32
         stb_s   r12, [r3, 3]
         mov_s   r12, 4
         st_s    r12, [r2, 0]

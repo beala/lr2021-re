@@ -3,6 +3,11 @@
 firmware/pram/scan.bin), runs CAD on each channel and drops into RX on the first one with a
 preamble. See docs/pram-scanner.md.
 
+By default the scan runs in the background (entry 4): one command starts it, the chip hops from
+its own event loop with BUSY low, and only RxDone reaches the IRQ pin. The console's `scanwait`
+sleeps on that pin, reads each packet and resumes the scan. --blocking uses the older entry 1, a
+command the host re-issues every ~600 ms.
+
   python3 tools/scan.py listen --ch 902.5:910:0.5 --seconds 60          # 16 channels, SF7/62.5 kHz
   python3 tools/scan.py listen --ch 903:7,904:8,905:9,906:10            # one SF per channel
   python3 tools/scan.py bench --channels 20 --trials 30                 # XIAO sends on random channels
@@ -19,6 +24,7 @@ import random
 import re
 import struct
 import sys
+import threading
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -89,7 +95,7 @@ def setup_scanner(c, name, chans):
         for addr, val in ((TAB + 8 * i, int(round(f * 1e6))), (TAB + 8 * i + 4, word1)):
             if 'mw st=0' not in c.cmd(f'mw {addr:X} {val:X}', 'mw st'):
                 raise RuntimeError('channel table write failed')
-    if c.rc(0x012D, 4, b'\x02')[1] != b'SCN1':
+    if c.rc(0x012D, 4, b'\x02')[1] != b'SCN2':
         raise RuntimeError('scanner blob not active')
 
 
@@ -137,6 +143,57 @@ def read_packet(c, timeout=2.0):
     return acc, pkt
 
 
+BG_STATE = ['off', 'cad', 'wait', 'rx', 'parked']
+BG_KEYS = ['word0', 'cads', 'falses', 'rx_lost', 'packets', 'rounds', 'events', 'lost_irq', 'irq', 'irq_gate']
+
+
+def bg(c, op, extra=b''):
+    """Entry 4: 1 start (n, CAD symbols, preamble wait symbols), 3 resume, 2 status, 0 stop."""
+    d = dict(zip(BG_KEYS, struct.unpack('<10I', ok(c, 0x012D, bytes([4, op]) + extra, 40))))
+    w = d.pop('word0')
+    d.update(state=BG_STATE[w & 0xFF] if (w & 0xFF) < len(BG_STATE) else w & 0xFF, last_hit=(w >> 8) & 0xFF,
+             channel=(w >> 16) & 0xFF, hooked=bool(w >> 24))
+    return d
+
+
+def bg_start(c, name, chans, cad_sym, wait_sym):
+    ok(c, 0x0128, b'\0')
+    ok(c, 0x0115, bytes([IRQ_DIO[name]]) + be32(IRQ_RXDONE))    # only RxDone wakes the MCU
+    irq(c)
+    return bg(c, 1, bytes([len(chans), cad_sym, wait_sym]))
+
+
+def bg_stop(c):
+    s = bg(c, 0)
+    ok(c, 0x0128, b'\0')
+    return s
+
+
+def scanwait(c, seconds, on_packet):
+    """Console `scanwait`: the MCU sleeps until RxDone, reads the packet and resumes the scan."""
+    c.s.reset_input_buffer()
+    c.s.write(f'scanwait {int(seconds * 1000)}\r'.encode())   # 0: until 'x'
+    buf, end = b'', time.time() + (seconds or 600) + 3
+    while time.time() < end:
+        buf += c.s.read(4096)
+        while b'\n' in buf:
+            line, buf = buf.split(b'\n', 1)
+            line = line.decode(errors='replace').strip()
+            m = re.match(r'SCAN (\d+) ch=(\d+) len=(\d+) st=(-?\d+) snr=(-?[\d.]+) rssi=(-?[\d.]+) data=([0-9A-F]*)', line)
+            if m:
+                on_packet(dict(t=int(m[1]) / 1e3, ch=int(m[2]), st=int(m[4]), snr=float(m[5]), rssi=float(m[6]),
+                               data=bytes.fromhex(m[7])))
+            elif line.startswith('scanwait done'):
+                return line
+    raise RuntimeError('scanwait did not finish')
+
+
+def bg_summary(s, seconds):
+    return (f"{s['cads']} CADs in the background ({s['cads'] / seconds:.0f}/s), {s['rounds']} passes, "
+            f"{s['falses']} false alarms recovered on-chip, {s['rx_lost']} lost after a preamble, "
+            f"{s['packets']} packets, final state {s['state']} (last hit ch{s['last_hit']})")
+
+
 def ports():
     return {'xiao': default_port('XIAO', '/dev/ttyACM0'), 'nicerf': default_port('RAK3401', '/dev/ttyACM1')}
 
@@ -146,6 +203,8 @@ def cmd_listen(args):
     name = args.board
     c = pram.Console(ports()[name])
     setup_scanner(c, name, chans)
+    if not args.blocking:
+        return listen_bg(c, name, chans, args)
     rounds = scan_rounds(chans, args.cad_sym)
     print(f'scanning {len(chans)} channels, {rounds} rounds per command; ctrl-c to stop')
     t_end = time.time() + args.seconds if args.seconds else None
@@ -175,6 +234,74 @@ def cmd_listen(args):
         console_init(c, *chans[0][:1], chans[0][2], chans[0][1])
 
 
+def listen_bg(c, name, chans, args):
+    secs = args.seconds or 3600
+    bg_start(c, name, chans, args.cad_sym, args.wait_sym)
+    print(f'scanning {len(chans)} channels in the background for {secs:.0f} s; the MCU waits for RxDone')
+
+    def show(p):
+        f, sf, bw = chans[p['ch']] if p['ch'] < len(chans) else (0, 0, 0)
+        print(f"{p['t']:8.2f} ch{p['ch']:2} {f:.3f} MHz SF{sf}/{bw:g}: {len(p['data'])} B rssi {p['rssi']} "
+              f"snr {p['snr']} st {p['st']} {p['data'].hex()}", flush=True)
+    try:
+        print(scanwait(c, secs, show))
+    finally:
+        print(bg_summary(bg_stop(c), secs))
+        console_init(c, chans[0][0], chans[0][2], chans[0][1])
+
+
+def bench_bg(sc, tx, rx_name, chans, args):
+    """Background scan: start it once, then the other board sends on random channels at random moments."""
+    pre = 32 if args.sf <= 8 else 16
+    random.seed(args.seed)
+    plan = []
+    for trial in range(args.trials):
+        k = random.randrange(len(chans))
+        plan.append((k, f'scan {trial:03d} ch{k:02d}'.encode(), random.uniform(0, 0.15)))
+    period = 0.45
+    got, res = [], {}
+    bg_start(sc, rx_name, chans, args.cad_sym, args.wait_sym)
+    t_start = time.time()
+    th = threading.Thread(target=lambda: res.setdefault('line', scanwait(sc, 0, got.append)))
+    try:
+        th.start()
+        time.sleep(0.5)
+        t0 = time.time()
+        for i, (k, payload, jitter) in enumerate(plan):
+            ok(tx, 0x0128, b'\0')
+            ok(tx, 0x0200, be32(int(chans[k][0] * 1e6)))
+            ok(tx, 0x0221, bytes([0, pre, len(payload), 0x02]))
+            ok(tx, 0x011F)
+            ok(tx, 0x0002, payload)
+            irq(tx)
+            while time.time() < t0 + i * period + jitter:
+                time.sleep(0.002)
+            ok(tx, 0x020D, b'\0\0\0')
+            t1 = time.time()
+            while time.time() - t1 < 1 and not irq(tx) & IRQ_TXDONE:
+                pass
+        time.sleep(1)
+        sc.s.write(b'x')                             # end scanwait
+        th.join()
+        if args.verbose:
+            print('before stop:', bg(sc, 2))
+    finally:
+        secs = time.time() - t_start
+        s = bg_stop(sc)
+        for c in (sc, tx):
+            console_init(c, chans[0][0], args.bw, args.sf)
+    good = sum(1 for k, payload, _ in plan if any(p['data'] == payload and p['ch'] == k and p['st'] == 0 for p in got))
+    other = [p for p in got if not any(p['data'] == payload for _, payload, _ in plan)]
+    print(res.get('line'))
+    print(bg_summary(s, secs))
+    print(f'{len(chans)} channels, CAD {args.cad_sym} symbol(s), background: {good}/{len(plan)} packets caught on the '
+          f'right channel and decoded, {len(other)} other')
+    missed = [(k, payload.decode()) for k, payload, _ in plan
+              if not any(p['data'] == payload and p['ch'] == k and p['st'] == 0 for p in got)]
+    if missed:
+        print('missed:', missed, 'received:', [(p['ch'], p['st'], p['data']) for p in got if p['data'] in [m[1].encode() for m in missed]])
+
+
 def cmd_bench(args):
     chans = parse_channels(','.join(f'{902.5 + 0.25 * i}' for i in range(args.channels)), args.sf, args.bw)
     p = ports()
@@ -183,6 +310,8 @@ def cmd_bench(args):
     sc, tx = pram.Console(p[rx_name]), pram.Console(p[tx_name])
     setup_scanner(sc, rx_name, chans)
     console_init(tx, chans[0][0], args.bw, args.sf)
+    if not args.blocking:
+        return bench_bg(sc, tx, rx_name, chans, args)
     rounds = scan_rounds(chans, args.cad_sym)
     pre = 32 if args.sf <= 8 else 16
     random.seed(args.seed)
@@ -229,6 +358,8 @@ def main():
     ap.add_argument('--bw', type=float, default=62.5, choices=BW_CODE)
     ap.add_argument('--cad-sym', type=int, default=1, help='CAD length in symbols (1 or 2)')
     ap.add_argument('--wait-sym', type=int, default=8, help='symbols to wait for a preamble after a CAD hit')
+    ap.add_argument('--verbose', action='store_true')
+    ap.add_argument('--blocking', action='store_true', help='re-issued scan command (entry 1) instead of the background scan')
     sub = ap.add_subparsers(dest='cmd', required=True)
     lp = sub.add_parser('listen')
     lp.add_argument('--ch', required=True, help='MHz[:SF[:BW]],... or start:stop:step')

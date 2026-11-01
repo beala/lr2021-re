@@ -1,6 +1,7 @@
-// On-chip multi-channel LoRa scanner: hop over a channel table running CAD on each channel, and
-// stop on the first detection. With exit mode RX the chip is then already receiving the packet on
-// that channel; the host just waits for RxDone as usual.
+// On-chip multi-channel LoRa scanner (docs/pram-scanner.md): hop over a channel table running CAD
+// on each channel, and stop on the first detection. With exit mode RX the chip is then already
+// receiving the packet on that channel; the host just waits for RxDone as usual. Entry 1 does it
+// as a blocking command, entry 4 in the background from the ROM's state handler slot.
 //
 // Channel table (written by the host with WriteRegMem32 before the command), at TAB:
 //   struct { u32 freq_hz; u8 mod0, mod1, peak, pre; }   x n  (n <= 32)
@@ -22,6 +23,8 @@
 //
 // The radio must be in LoRa mode, the fallback mode FS (0x0206 03) so the synthesizer keeps
 // running between hops, and the DIO IRQ mask set by the host.
+//
+// Entry 4 runs the same scan in the background, with no command held: see bg_state below.
 typedef unsigned int u32;
 typedef unsigned char u8;
 
@@ -32,6 +35,7 @@ typedef int (*handler_t)(u32 len, const u8 *p, struct resp *r);
 #define H_CAD_PARAMS  ((handler_t)0xF188)   // 0x0227
 #define H_SET_CAD     ((handler_t)0xF178)   // 0x0228
 #define H_LORA_PKT    ((handler_t)0xF274)   // 0x0221
+#define H_SET_FS      ((handler_t)0xEB40)   // 0x0129
 
 #define IRQ (*(volatile u32 *)0xF2A00C)     // IRQ status, write 1 to clear
 #define IRQ_CAD_DET  (1u << 7)
@@ -140,5 +144,196 @@ out:
   r->buf[3] = cads >> 8; r->buf[4] = cads;
   r->buf[5] = falses > 255 ? 255 : falses; r->buf[6] = polls >> 8; r->buf[7] = polls;
   r->len = 8;
+  return 3;
+}
+
+// ---- Background scan (entry 4) ----
+//
+// The ROM main loop hands every radio event (CadDone, preamble, RX timeout, RxDone...) to the
+// state handler at gp+0x34, which the ROM's own commands set (SetLoraCad installs 0x8074, a CAD
+// detection in exit mode RX moves on to the RX handler 0x8248, and so on). bg_state takes that
+// slot: it passes each event to the handler the ROM installed, then looks at the IRQ status and
+// takes the next step of the scan itself. Commands and state handlers both run from the main
+// loop, so nothing here races a host command, and between events the chip sleeps as usual.
+//
+//   CadDone, nothing      -> next channel
+//   CadDone + detected    -> the chip is in RX on that channel: wait for a preamble
+//   preamble / header     -> stay; RxDone then reaches the host's IRQ pin like any packet and
+//                            the scan pauses ("parked") until the host has read it and resumes
+//   RX timeout, header error -> false alarm, next channel
+//
+// The scan clears only its own IRQ bits, never RxDone / CrcError, which belong to the host.
+// The host routes only RxDone to its DIO, so it sleeps through the hops.
+#define IRQ_HDR_ERR  (1u << 9)
+#define IRQ_CRC      (1u << 22)
+#define IRQ_OWN      (IRQ_PREAMBLE | IRQ_HDR | IRQ_CAD_DET | IRQ_HDR_ERR | IRQ_CAD_DONE | IRQ_TIMEOUT)
+#define IRQ_GATE     (*(volatile u32 *)0x80060C)   // global mask applied by 0x6ADC before the status
+// The RX timeout (a channel of the radio's 32.768 kHz timer block). SetRx arms it through 0xC7F4;
+// on a preamble the ROM stops it with 0xC828 when StopTimeoutOnPreamble is on (0x4C60). The
+// armed flag is the byte at gp+12, and 0xC828 does nothing when it is clear.
+#define ROM_RX_TIMEOUT_ARM  ((u32 (*)(u32))0xC7F4)
+#define ROM_RX_TIMEOUT_STOP ((u32 (*)(void))0xC828)
+enum { S_OFF, S_CAD, S_WAIT, S_RX, S_PARK };
+struct bgs {
+  u32 orig;                            // the ROM's state handler we stand in front of
+  u32 running, state, n, c, wsym, gate_saved;
+  u32 last_mod, last_pre, last_peak;
+  u32 cads, falses, hdr_err, hits, rounds, last_hit, events, lost_irq;
+  u8 cadp[8];
+};
+#define BG ((struct bgs *)0x807A00)    // after the channel table (32 x 8 bytes at 0x807800)
+#define STATE_SLOT (*(volatile u32 *)(GP + 0x34))
+#define RUNNING 0x5CA90001u                // RAM isn't cleared at load: a magic, not just nonzero
+
+u32 bg_state(u32 ev);
+
+static void hook_in(struct bgs *b) {
+  u32 cur = STATE_SLOT;
+  if (cur != (u32)bg_state) { b->orig = cur; STATE_SLOT = (u32)bg_state; }
+}
+
+static void start_cad(struct bgs *b) {
+  const struct chan *ch = &TAB[b->c];
+  u8 fb[4], mod[2], pkt[4] = { 0, 0, 0, 0x02 };
+  u32 f = ch->freq;
+  fb[0] = f >> 24; fb[1] = f >> 16; fb[2] = f >> 8; fb[3] = f;
+  H_SET_RF_FREQ(4, fb, 0);
+  u32 m = ch->mod0 | (ch->mod1 << 8);
+  if (m != b->last_mod) { mod[0] = ch->mod0; mod[1] = ch->mod1; H_LORA_MOD(2, mod, 0); b->last_mod = m; }
+  if (ch->pre && ch->pre != b->last_pre) { pkt[1] = ch->pre; H_LORA_PKT(4, pkt, 0); b->last_pre = ch->pre; }
+  b->cadp[6] = ch->peak;
+  u32 wt = wait_ticks(ch->mod0, b->wsym);
+  b->cadp[3] = wt >> 16; b->cadp[4] = wt >> 8; b->cadp[5] = wt;
+  H_CAD_PARAMS(7, b->cadp, 0);
+  IRQ = IRQ_OWN;
+  H_SET_CAD(0, 0, 0);
+  b->cads++;
+  b->state = S_CAD;
+  hook_in(b);                          // SetLoraCad installed the ROM's CAD handler: get in front again
+}
+
+static void next_chan(struct bgs *b) {
+  if (++b->c >= b->n) { b->c = 0; b->rounds++; }
+  start_cad(b);
+}
+
+// Leave RX for the scan: a header error doesn't end RX, and SetLoraCad from RX starts nothing.
+static void rx_abandon(struct bgs *b) {
+  ROM_RX_TIMEOUT_STOP();
+  H_SET_FS(0, 0, 0);
+  b->last_mod = 0xFFFFFFFFu; b->last_pre = 0x100;   // re-send the params after an RX
+  next_chan(b);
+}
+
+u32 bg_state(u32 ev) {
+  struct bgs *b = BG;
+  u32 (*h)(u32) = (u32 (*)(u32))b->orig;
+  if (h) ev = h(ev);
+  if (b->running != RUNNING) {         // stopped: step aside
+    if (STATE_SLOT == (u32)bg_state) STATE_SLOT = b->orig;
+    return ev;
+  }
+  hook_in(b);                          // the ROM handler may have installed its successor
+  b->events++;
+  u32 s = IRQ;
+  switch (b->state) {
+    case S_CAD:
+      if (!(s & IRQ_CAD_DONE)) break;
+      if (!(s & IRQ_CAD_DET)) { next_chan(b); break; }
+      b->state = S_WAIT;
+      /* fall through: the preamble may already be there */
+    case S_WAIT:
+      if (s & (IRQ_PREAMBLE | IRQ_HDR | IRQ_RX_DONE)) {
+        b->state = S_RX;
+        b->last_hit = b->c;
+        // A preamble stopped the RX timeout. Re-arm it until the header: a preamble that never
+        // becomes a header (noise, an aborted packet, another modulation) would otherwise leave
+        // the radio in RX with no event to wake the scan.
+        if (!(s & (IRQ_HDR | IRQ_RX_DONE))) {
+          const struct chan *ch = &TAB[b->c];
+          ROM_RX_TIMEOUT_ARM(wait_ticks(ch->mod0, (ch->pre ? ch->pre : 32) + 16));
+        }
+      } else {
+        if (s & (IRQ_TIMEOUT | IRQ_HDR_ERR)) { b->falses++; rx_abandon(b); }
+        break;
+      }
+      /* fall through */
+    case S_RX:
+      if (s & (IRQ_HDR | IRQ_RX_DONE)) ROM_RX_TIMEOUT_STOP();   // the header came: no limit on the payload
+      if (s & IRQ_RX_DONE) { b->hits++; b->state = S_PARK; }
+      else if (s & (IRQ_TIMEOUT | IRQ_HDR_ERR)) { b->hdr_err++; b->lost_irq = s; rx_abandon(b); }
+      break;
+    default:
+      break;
+  }
+  return ev;
+}
+
+static void bg_resp(struct bgs *b, struct resp *r) {
+  u32 v[10] = { b->state | (b->last_hit << 8) | (b->c << 16) | ((STATE_SLOT == (u32)bg_state) << 24),
+                b->cads, b->falses, b->hdr_err, b->hits, b->rounds, b->events, b->lost_irq, IRQ, IRQ_GATE };
+  for (u32 i = 0; i < 10; i++) {
+    r->buf[4 * i] = v[i]; r->buf[4 * i + 1] = v[i] >> 8; r->buf[4 * i + 2] = v[i] >> 16; r->buf[4 * i + 3] = v[i] >> 24;
+  }
+  r->len = 40;
+}
+
+// 4: background scan. Params: op (1), then for op 1: n (1), cad symbols (1), symbols to wait for
+// a preamble after a detection (1).
+//   op 1  start: scan the table from channel 0 and return at once (exit mode RX)
+//   op 3  resume after a packet: clear RxDone / CrcError (the host has read the packet) and
+//         carry on from the next channel
+//   op 2  status
+//   op 0  stop: give the state slot back; the chip stays in whatever the ROM left it (send
+//         SetStandby next)
+// Response, 10 LE words: state | last hit << 8 | channel << 16 | hooked << 24, CADs, false alarms,
+// lost after a preamble (header error, or no header in time), packets, rounds, events seen, the
+// IRQ status at the last loss, IRQ status, IRQ gate.
+int bg_cmd(u32 len, const u8 *p, struct resp *r) {
+  struct bgs *b = BG;
+  if (len < 1) return 1;
+  u32 op = p[0];
+  if (op == 1) {
+    if (len < 4 || p[1] == 0 || p[1] > 32) return 1;
+    if (b->running != RUNNING || STATE_SLOT != (u32)bg_state) b->gate_saved = IRQ_GATE;  // not a restart
+    IRQ_GATE |= IRQ_OWN;               // so the ROM records the scan's flags in the status
+    b->n = p[1]; b->wsym = p[3]; b->c = 0;
+    for (u32 i = 0; i < 8; i++) b->cadp[i] = 0;
+    b->cadp[0] = p[2]; b->cadp[2] = 1; // exit mode RX
+    b->last_mod = 0xFFFFFFFFu; b->last_pre = b->last_peak = 0x100;
+    b->cads = b->falses = b->hdr_err = b->hits = b->rounds = b->events = b->lost_irq = 0;
+    b->last_hit = 0xFF;
+    b->orig = 0;
+    b->running = RUNNING;
+    start_cad(b);
+  } else if (op == 3) {
+    if (b->running != RUNNING) return 1;
+    IRQ = IRQ_RX_DONE | IRQ_CRC | IRQ_OWN;
+    b->last_mod = 0xFFFFFFFFu; b->last_pre = 0x100;
+    next_chan(b);
+  } else if (op == 0) {
+    if (b->running == RUNNING) IRQ_GATE = b->gate_saved;
+    b->running = 0;
+    b->state = S_OFF;
+    if (STATE_SLOT == (u32)bg_state) STATE_SLOT = b->orig;
+  } else if (op != 2) {
+    return 1;
+  }
+  bg_resp(b, r);
+  return 3;
+}
+
+// 5: aux register access. Params: op (1: 0 read, 1 write), reg (4), value (4). Returns the value
+// read after the write, LE.
+int aux_cmd(u32 len, const u8 *p, struct resp *r) {
+  if (len < 5) return 1;
+  u32 a = ((u32)p[1] << 24) | (p[2] << 16) | (p[3] << 8) | p[4], v;
+  if (p[0] == 1 && len >= 9) {
+    v = ((u32)p[5] << 24) | (p[6] << 16) | (p[7] << 8) | p[8];
+    __asm__ volatile("sr %0,[%1]" :: "r"(v), "r"(a) : "memory");
+  }
+  __asm__ volatile("lr %0,[%1]" : "=r"(v) : "r"(a));
+  r->buf[0] = v; r->buf[1] = v >> 8; r->buf[2] = v >> 16; r->buf[3] = v >> 24;
+  r->len = 4;
   return 3;
 }

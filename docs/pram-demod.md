@@ -116,9 +116,8 @@ init through 0x103C4), so entry 6 (start):
 
 The handler switches buffers, clears the flags, demodulates the full buffer and does what the
 ROM's handler did for the other bits. When a frame is complete it calls the ROM's host-IRQ
-routine 0x6ADC with RxDone (bit 18). That routine masks with the DIO IRQ configuration
-([0x80060C], 0xFFFF0880 after RadioLib's init) and writes 0xF2A008, so the IRQ line rises as
-for a received packet. Stop (op 0) restores the vector base and priority.
+routine 0x6ADC with RxDone (bit 18). That routine applies the IRQ gate ([0x80060C], 0xFFFF0880
+from the ROM's init) and writes 0xF2A008, so the IRQ line rises as for a received packet. Stop (op 0) restores the vector base and priority.
 
 ## Entries (`demod.bin`)
 
