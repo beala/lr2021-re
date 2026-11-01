@@ -212,6 +212,25 @@ the command returned.
   it, CAD and the CAD-to-RX transition work under a command
   ([pram-scanner.md](pram-scanner.md)).
 
+### Interrupts [HW]/[RE]
+
+- IRQ_CTRL (aux 0x0E) is 0: on an interrupt the hardware saves only PC and STATUS32. Some of the
+  ROM's priority 0 handlers use r0–r2 without saving them; its priority 1 handlers (e.g. 0x7A90)
+  save r0–r3, r10–r12, r30, blink and lp_count/lp_start/lp_end by hand.
+- The vector table is at address 0 (INT_VECTOR_BASE, aux 0x25, written by the ROM's init through
+  0x103C4). Entries 16–50 are IRQs; many handlers read a status register at 0xFxx010, write it
+  back at 0xFxx004 to clear it, and call a hook from a RAM table (0x806860, 0x806870, 0x8060DC…)
+  or set a main-loop event bit.
+- **A blob can take over an interrupt:** copy the 52 vectors to a 1 KB aligned PRAM address,
+  replace one, and point INT_VECTOR_BASE at the copy. IRQ_SELECT (0x40B) + IRQ_PRIORITY (0x206)
+  set its priority. The APRS demodulator does this for IRQ 42, the RX FIFO "full" flag
+  ([pram-demod.md](pram-demod.md#running-in-the-background)).
+- Known sources: IRQ 40 (0x7A90) the RX datapath block 0xF24010; IRQ 42 (0x78C4) the FIFO/DMA
+  block, status 0xF30010 = flags 0xF30004 & enable 0xF30008; IRQ 39 the synthesizer block
+  0xF40010.
+- Host IRQs are raised with 0x6ADC(mask), which applies the DIO mask at 0x80060C and writes
+  0xF2A008; RxDone is bit 18.
+
 ## Toolchain
 
 `firmware/pram/build.sh` uses a patched ARC GCC 13.3 in Docker (`docker/Dockerfile.gcc`,
@@ -316,6 +335,7 @@ All of these need a chip reset (`set radio …` or `hold off` in the console).
 | Reading PRAM (0x101000) before activation | bus stall |
 | Writing PRAM while a blob is active | next command −705 |
 | Reading 0x100000 or 0x102000 (holes) | bus stall |
+| Reading 0xF2A008, 0xF24040 and up, or 0xF30060–0xF3007C | bus stall, host −705 |
 | A handler running over 1 s | RadioLib −705 (the chip is fine once it finishes) |
 | Waiting for a capture that never starts (e.g. no SetRx from FS) | command spins until its poll limit, host −705 |
 

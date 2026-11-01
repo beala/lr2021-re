@@ -132,6 +132,9 @@ Debug console: `cap <cfg> <words> <ms>` and `capwait <cfg> <ratio> <ms>`
 
 ## Streaming through the RX FIFO [HW]
 
+(The chip's own CPU can read this stream too, with the FIFO moved to free RAM: see
+[pram-demod.md](pram-demod.md#reading-the-fifo-from-the-cpu).)
+
 Route (from lr2021-sdr):
 
 ```

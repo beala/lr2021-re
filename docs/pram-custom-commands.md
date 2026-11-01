@@ -8,7 +8,8 @@ blob with the right header becomes a set of new host commands, reached through A
 
 A second blob, `scan.bin`, turns the chip into a multi-channel LoRa receiver: see
 [pram-scanner.md](pram-scanner.md). A third, `pll.bin`, makes FM (FSK, AFSK/APRS, tones, sweeps) by
-writing the synthesizer directly: see [pram-pll.md](pram-pll.md).
+writing the synthesizer directly: see [pram-pll.md](pram-pll.md). A fourth, `demod.bin`, decodes
+APRS from the raw-I/Q FIFO in the background, on an interrupt: see [pram-demod.md](pram-demod.md).
 
 This page covers the commands themselves. **How the CPU and PRAM work** is in
 [lr2021-cpu.md](lr2021-cpu.md): the blob format and calling convention, registers, timing,

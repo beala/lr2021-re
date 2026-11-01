@@ -61,7 +61,8 @@ PRAM is full: the 2240 B patch plus the 1840 B JLI table leave about 16 B free. 
 | 0x806000 | gp (small-data base) | [RE] |
 | 0x8060F8 | command router state | [RE] |
 | 0x8077F8 | PRAM patch variables (5 words, zeroed by its INI table); +0 = extension callback | [RE] |
-| 0x807800–0x807FFF | above the stack; untouched across RX, capture and FFTs (only 0x8076F8–0x8077BC changed). Used by the custom FFT: twiddle table, result and work buffer ([pram-custom-commands.md](pram-custom-commands.md)) | [HW] |
+| 0x807800–0x807FFF | above the stack; untouched across RX, capture and FFTs (only 0x8076F8–0x8077BC changed). Used by the custom FFT: twiddle table, result and work buffer ([pram-custom-commands.md](pram-custom-commands.md)); by the APRS demodulator: two RX FIFO buffers and its state ([pram-demod.md](pram-demod.md)) | [HW] |
+| 0x80060C / 0x800608 | DIO IRQ mask applied by 0x6ADC (0xFFFF0880 after RadioLib's init) / FIFO IRQ enable copy of 0xF2A004 | [HW]/[RE] |
 
 ## Peripheral registers (not in the datasheet)
 
@@ -72,7 +73,15 @@ PRAM is full: the 2240 B patch plus the 1840 B JLI table leave about 16 B free. 
 | 0xF30154 | [14:10] | copied to another status struct, meaning unknown | [RE] |
 | 0xF3012C | [26:18] | gain value per step: 16,28,38,49,57,64,73,85,96,108,120,127,138 for G1..G13 (139 idle/auto). Probably total gain in 0.5 dB units | [HW] |
 | 0xF301A8 | [26:18] | instantaneous RSSI (what GetRssiInst returns) | [RE] |
-| 0xF30028 / 0xF30030 | | RX FIFO base address / size | [HW] |
+| 0xF30028 / 0xF30030 | | RX FIFO base (offset from 0x800000; any RAM, e.g. 0x807800 for CPU reads) / size: "full" at size + 4 bytes | [HW] |
+| 0xF30038 | | RX FIFO: bytes written to RAM since the last clear (level − 24) | [HW] |
+| 0xF30004 | bits 3/4 | RX FIFO full / overflow flags, write 1 to clear (the ROM clears with 0x3918) | [HW] |
+| 0xF30008 | | FIFO flags that interrupt the CPU (IRQ 42); 0x10000 after boot | [HW] |
+| 0xF30010 | | 0xF30004 & 0xF30008: the status the IRQ 42 handler (0x78C4) reads | [HW] |
+| 0xF3003C | | reads 0; a write doesn't move the RX FIFO read pointer | [HW] |
+| 0xF2A0AC / 0xF2A0B0 | [10:0] | RX / TX FIFO level (GetRxFifoLevel / GetTxFifoLevel) | [HW]/[RE] |
+| 0xF2A004 / 0xF2A094 / 0xF2A098 / 0xF2A09C | | FIFO IRQ enables, routing and thresholds (ConfigFifoIrq); host DIO only, no CPU interrupt reads this block | [RE] |
+| 0xF2A008 / 0xF2A00C | | raise host IRQs (0x6ADC) / host IRQ status | [RE] |
 | 0xF30C28 | [28:24], [22:21], [20] | AGC config (0x022F) | [RE] |
 | 0xF30C28 | [9:5] | BLE frequency drift setting (PRAM hook 71) | [RE] |
 | 0xF30C14 | [6:0] | BLE blocking setting (PRAM hook 69) | [RE] |
@@ -84,7 +93,7 @@ PRAM is full: the 2240 B patch plus the 1840 B JLI table leave about 16 B free. 
 | 0xF30904 | bits 4/5 | raw TX sample format: bit 4 = frequency (rate/256 per unit), bit 5 = frequency (rate/128) (0x0293) | [HW] |
 | 0xF30800 | bits 10/11 | packet-engine source select: 2 = I/Q pairs, 1 = one byte per sample (0x0293) | [HW] |
 | 0xF3002C / 0xF30034 | | TX FIFO base (0x804000) / size register; the FIFO stays 1 KB whatever the size says | [HW] |
-| 0xF3001C | bits 2/3 | clear RX / TX FIFO | [RE] |
+| 0xF3001C | bits 2/3 | clear RX / TX FIFO. Bit 2 alone restarts the RX FIFO at the current base without losing a sample ([pram-demod.md](pram-demod.md)) | [HW] |
 | 0xF30838 | | raw TX packet length (0x0293) | [RE] |
 | 0xF30130 | [8:0], [24:16] | two 9-bit values written by 0x0294 | [RE] |
 | 0xF30A30 | [28:16] | written by 0x021F; [27:24] acts in the LoRa payload demodulator ([lora-detection.md](lora-detection.md)) | [HW] |

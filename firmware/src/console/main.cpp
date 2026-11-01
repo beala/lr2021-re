@@ -15,6 +15,8 @@
 //   pinmon <ms> / pinsnap <n>       XIAO only: watch the pads wired to the MCU (docs/test-bus.md)
 //   wfrun <nseg> [frames] [ov]      stream the on-chip spectrum (PRAM entry 9) as binary frames until x;
 //                                   ov = 1: overlap the next capture with the FFT (nseg 1)
+//   aprswait <ms>                   print the frames the chip's background APRS receiver (PRAM demod.bin)
+//                                   decodes, waking on its RxDone IRQ
 //   help
 //
 // Receiver: while not held the chip receives LoRa with the current settings and prints one line
@@ -194,14 +196,16 @@ static bool fastMemRead(uint32_t addr, uint8_t* out, uint8_t nwords) {
 // Read-type command on raw SPI (command frame, BUSY wait, response frame clocked with 0x00 from RAM).
 // Returns the command status (bits 3:1 of the first status byte; 3 = data) or -1 on a BUSY timeout.
 static int fastCmdRead(const uint8_t* cmd, size_t clen, uint8_t* out, size_t olen, uint32_t busyUs) {
-  static uint8_t tx[16], rx[2 + 16], zeros[2 + 16];
-  if (clen > sizeof(tx) || olen > 16) return -1;
+  static uint8_t tx[16], rx[2 + 48], zeros[2 + 48];
+  if (clen > sizeof(tx) || olen > 48) return -1;
   memcpy(tx, cmd, clen);
   SPISettings fast(16000000, MSBFIRST, SPI_MODE0);
   for (int pass = 0; pass < 2; pass++) {
     delayMicroseconds(2);
-    uint32_t t = micros();
-    while (digitalRead(P_LORA_BUSY)) if (micros() - t > busyUs) return -1;
+    // micros() here doesn't run the full 32 bits before wrapping, so a long wait counts in millis()
+    uint32_t t = micros(), tm = millis();
+    while (digitalRead(P_LORA_BUSY))
+      if (busyUs >= 100000 ? millis() - tm > busyUs / 1000 : micros() - t > busyUs) return -1;
     SPI.beginTransaction(fast);
     digitalWrite(P_LORA_NSS, LOW);
     if (pass == 0) SPI.transfer(tx, nullptr, clen);
@@ -253,6 +257,58 @@ static void wfrun(uint32_t nseg, uint32_t frames, bool ov) {
   // averages per frame: chip command, SPI readback, USB write
   Serial.printf("\nwfrun done %lu chip_us %lu read_us %lu write_us %lu\n", (unsigned long)n, (unsigned long)(n ? sumChip / n : 0),
                 (unsigned long)(n ? sumRead / n : 0), (unsigned long)(n ? sumWrite / n : 0));
+}
+
+// aprswait <ms>: the chip demodulates APRS in the background (entry 6 of firmware/pram/demod.bin,
+// started by tools/aprs_rx.py) and raises RxDone on its IRQ line for each good frame. The MCU
+// just idles until that line goes high, like for a normal packet: then it clears the IRQ, reads
+// the frames from PRAM 0x101A00, prints "APRS <ms> <hex>" per frame (AX.25, no FCS) and drops
+// the bytes it read from the chip's output. Runs <ms> ms (0 = until 'x'), then prints
+// "aprswait done irqs <n> frames <n>"; "# aprswait <ms>" every second meanwhile.
+static uint32_t le32(const uint8_t* b) { return b[0] | b[1] << 8 | b[2] << 16 | (uint32_t)b[3] << 24; }
+static void aprswait(uint32_t ms) {
+  HalAccess* hal = static_cast<HalAccess*>(static_cast<ArduinoHal*>(radio.getMod()->hal));
+  SPISettings saved = hal->spiSettings;
+  hal->spiSettings = SPISettings(16000000, MSBFIRST, SPI_MODE0);
+  static uint8_t out[512];
+  uint8_t rsp[44];
+  uint32_t irqs = 0, frames = 0, t0 = millis(), tAlive = t0;
+  bool err = false;
+  while (ms == 0 || millis() - t0 < ms) {
+    if (Serial.available() && Serial.read() == 'x') break;
+    // A line printed after a couple of seconds of silence didn't reach the PC in testing, so
+    // print a keep-alive line every second.
+    if (millis() - tAlive >= 1000) { tAlive = millis(); Serial.printf("# aprswait %lu\n", (unsigned long)(tAlive - t0)); }
+    if (digitalRead(P_LORA_DIO_1) == LOW) { delay(1); continue; }   // idle until the chip's IRQ
+    irqs++;
+    uint8_t clr[6] = { 0x01, 0x16, 0x00, 0x04, 0x00, 0x00 };          // ClearIrq RxDone (bit 18)
+    uint8_t stat[4] = { 0x01, 0x2D, 6, 2 };                            // entry 6, op 2: status
+    if (fastCmdRead(clr, sizeof(clr), rsp, 0, 100000) < 0 || fastCmdRead(stat, sizeof(stat), rsp, sizeof(rsp), 100000) != 3) {
+      err = true;
+      break;
+    }
+    uint32_t outlen = le32(rsp + 40);
+    if (outlen > sizeof(out)) outlen = sizeof(out);
+    for (uint32_t o = 0; o < outlen && !err; o += 128) {
+      uint32_t w = (outlen - o + 3) / 4;
+      if (!fastMemRead(0x101A00 + o, out + o, w > 32 ? 32 : w)) err = true;
+    }
+    if (err) break;
+    uint32_t o = 0;
+    while (o + 2 <= outlen) {
+      uint32_t n = out[o] | out[o + 1] << 8;
+      if (o + 2 + n > outlen) break;
+      Serial.printf("APRS %lu ", (unsigned long)(millis() - t0));
+      for (uint32_t i = 0; i < n; i++) Serial.printf("%02X", out[o + 2 + i]);
+      Serial.print("\n");
+      frames++;
+      o += 2 + n;
+    }
+    uint8_t ack[6] = { 0x01, 0x2D, 6, 3, (uint8_t)(o >> 8), (uint8_t)o };   // op 3: drop what was read
+    if (fastCmdRead(ack, sizeof(ack), rsp, sizeof(rsp), 100000) != 3) { err = true; break; }
+  }
+  hal->spiSettings = saved;
+  Serial.printf("aprswait done irqs %lu frames %lu%s\n", (unsigned long)irqs, (unsigned long)frames, err ? " error" : "");
 }
 
 static int hexval(char c) {
@@ -333,6 +389,11 @@ static bool handleRadio(const char* cmd) {
     wfrun(nseg, frames, ov != 0);
     return true;
   }
+  if (!strncmp(cmd, "aprswait ", 9)) {
+    stopRx();
+    aprswait(strtoul(cmd + 9, NULL, 0));
+    return true;
+  }
   if (!strcmp(cmd, "rxread")) {
     // Read the packet a raw command sequence left in the RX FIFO (e.g. after a PRAM CAD scan),
     // without touching the receiver state. "rc" can't do this: the FIFO data must follow the
@@ -354,7 +415,7 @@ static bool handleRadio(const char* cmd) {
     return true;
   }
   if (!strcmp(cmd, "help")) {
-    Serial.println("# debug: mr mw rc err romprobe cap capwait stream streamdump streamstats iqstream hold");
+    Serial.println("# debug: mr mw rc err romprobe cap capwait stream streamdump streamstats iqstream hold wfrun aprswait");
     Serial.println("# radio: get radio | set radio <MHz>,<BW>,<SF>,<CR> | get tx | set tx <dBm> | loratx <hex> | rxstats");
     Serial.printf("# %s, hold %s\r\n", board.getManufacturerName(), lr2021dbg::hold ? "on" : "off");
     return true;

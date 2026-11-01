@@ -80,9 +80,10 @@ which has no location set.
 | [docs/ranging.md](docs/ranging.md) | RTToF ranging between the two boards with raw commands; the PRAM patch fixes the ranging RSSI |
 | [docs/pram-scanner.md](docs/pram-scanner.md) | Multi-channel LoRa receiver on the chip: CAD hopping over up to 32 channels from PRAM, ~20 channels at MeshCore's SF7 preamble; the ROM event loop a long command must run |
 | [docs/pram-pll.md](docs/pram-pll.md) | FM generated on the chip by writing the synthesizer word (0xF40144) during CW: flat to 100 kHz, on-chip AFSK APRS that decodes |
+| [docs/pram-demod.md](docs/pram-demod.md) | APRS demodulated on the chip in the background: the CPU reads the raw-I/Q FIFO by moving it between two buffers, an IRQ 42 handler of our own does the work, RxDone on the IRQ line per frame |
 | [docs/lora-detection.md](docs/lora-detection.md) | Undocumented LoRa sync/detection commands (raw sync word 0x022D, 0x021F, 0x0226); the sync word barely filters |
 | [docs/dualband-bench.md](docs/dualband-bench.md) | 908 MHz / 2478 MHz dual-band CAD scanning: switch time, catch rates |
-| [firmware/README.md](firmware/README.md) | The test firmware: console (`mr`, `mw`, `rc`, `stream`, `iqstream`, LoRa RX/TX), benches, boards |
+| [firmware/README.md](firmware/README.md) | The test firmware: console (`mr`, `mw`, `rc`, `stream`, `iqstream`, `wfrun`, `aprswait`, LoRa RX/TX), benches, boards |
 
 Data tables:
 
@@ -134,6 +135,10 @@ Data tables:
 - **The chip makes its own FM:** PRAM code writing the synthesizer word during a CW carrier moves it
   within ~2 µs; FM response is flat to 100 kHz. An on-chip AFSK generator sends APRS frames that
   an RTL-SDR decodes, with nothing streamed from the host ([pram-pll.md](docs/pram-pll.md)).
+- **The chip demodulates too:** a PRAM blob decodes APRS (AFSK 1200) from the radio's raw I/Q in
+  the background, taking over the FIFO interrupt through a copied vector table, and raises RxDone
+  for each good frame, like a built-in modem. 20/20 frames on each board, no FIFO overruns in 42 s
+  of demodulation, about 40 % of the CPU at most ([pram-demod.md](docs/pram-demod.md)).
 - **The LoRa sync word is a weak filter:** a receiver on 0x12 accepts any first nibble except 0
   (0x22, 0x42, 0xF2 all 100 %) and some packets with a different second nibble. Undocumented
   0x022D sets the two sync symbols directly, odd values included ([lora-detection.md](docs/lora-detection.md)).
@@ -160,6 +165,7 @@ python3 tools/ranging.py --n 200 --sf 9                           # RTToF rangin
 python3 tools/lora_per.py --tx-rc 0223:42 --rx-rc 0223:12         # packet delivery with raw commands on either side (908 MHz)
 python3 tools/scan.py bench --channels 20 --trials 30             # on-chip multi-channel receiver vs the other board (902.5-910.25 MHz)
 python3 tools/pll.py aprs --sdr                                   # APRS frame generated on the chip (908 MHz), decoded by an RTL-SDR
+python3 tools/aprs_rx.py bench --trials 20                        # APRS from one board's PLL, demodulated on the other chip
 ```
 
 ## Layout
