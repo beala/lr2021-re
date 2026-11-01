@@ -398,6 +398,7 @@ static void spifree(const uint8_t* cmd, size_t n) {
     lastSck = sck;
   }
   if (st == 0) while (millis() - tm < spifreeMinMs) {    // the chip may drop BUSY itself mid-command
+    if (Serial.available() && Serial.read() == 'x') break;   // 'x' ends the wait early
     int sck = digitalRead(P_LORA_SCLK);
     ns++;
     nssLow += !digitalRead(P_LORA_NSS);

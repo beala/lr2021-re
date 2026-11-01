@@ -14,7 +14,7 @@ python3 tools/mesh_rpt.py run --mhz 910.525 --preamble 32 --seconds 600
 
 The bench below: the XIAO repeating, the NiceRF board sending MeshCore-shaped packets with its
 console and listening for the repeats. 908 MHz, SF7, 62.5 kHz, CR 4/5, 16-symbol preamble, −9 dBm
-into dummy loads. Real MeshCore nodes weren't on the air.
+into dummy loads. Then [with a real MeshCore companion](#with-a-real-meshcore-companion).
 
 ## What it does
 
@@ -62,6 +62,20 @@ to the handler the ROM installed, then acts on the IRQ status.
 
 Delays follow MeshCore's rule: with the default factor 0.5 a 30-byte flood (160 ms on the air) waits 0–400 ms.
 
+## With a real MeshCore companion
+
+The XIAO repeating at 22 dBm with an antenna, as `00` (`--id 00000000`), MeshCore's 32-symbol
+preamble, 908 MHz, SF7, 62.5 kHz, CR 4/5, and a stock MeshCore companion sending on the same
+settings:
+
+```
+python3 tools/mesh_rpt.py run --mhz 908 --cr 5 --id 00000000 --preamble 32 --dbm 22 --seconds 1800
+```
+
+The companion sent two flood messages and **heard both repeated** by the LR2021. The chip's
+counters for the run: 2 received, 2 floods forwarded, 2 TX done, no CRC or header errors, no
+duplicates, nothing ignored, no SPI write failures.
+
 ## Entries (`mesh.bin`)
 
 | Entry | Params | What it does |
@@ -84,7 +98,7 @@ RAM: 0x807800 packet to send, 0x807900 last received packet, 0x807A00 RX FIFO, 0
 - Simple: no transport codes or regions, no TRACE, no ACK special cases, no listen-before-talk
   beyond the RX wait, one packet in flight, no flood hop limits per type, no airtime budget.
 - The ID is whatever the host passes; a real repeater would use the first bytes of its public key.
-- Tested at SF7 / 62.5 kHz with a 16-symbol preamble. MeshCore itself uses 32 symbols at SF7–8:
-  pass `--preamble 32`. The receiver's preamble must match the transmitter's
+- Tested at SF7 / 62.5 kHz only: the bench with a 16-symbol preamble, the companion with
+  MeshCore's 32 (`--preamble 32`; MeshCore uses 16 from SF9). The receiver's preamble must match the transmitter's
   ([commands.md](commands.md#behavior-of-documented-commands-measured-on-hardware)).
 - `set radio` resets the chip and clears PRAM; reload the blob after it.
