@@ -38,7 +38,7 @@ BW_CODE = {62.5: 3, 125: 4, 250: 5, 500: 6}
 NAMES = ['state', 'received', 'crc_errors', 'header_errors', 'floods_forwarded', 'directs_forwarded',
          'duplicates', 'ignored', 'busy', 'tx_done', 'spi_write_failures', 'events', 'last_len',
          'waiting_len', 'waiting_delay_ticks', 'irq', 'uptime_s', 'adverts_sent', 'traces_forwarded', 'last_snr_x4']
-ADV_ADDR = 0x807C00
+ADV_ADDR = 0x807D70                 # mesh.c ADV, <= 144 bytes
 ADV_TYPE_REPEATER, ADV_NAME_MASK = 2, 0x80
 
 
@@ -132,6 +132,8 @@ def main():
     mesh(c, 1, params)
     if key:
         adv = advert_packet(key, a.name)
+        if len(adv) > 144:
+            raise SystemExit('advert too long: shorten --name')
         store(c, ADV_ADDR, adv)
         mesh(c, 4, bytes([len(adv)]) + struct.pack('>HH', a.advert_every, 3))
         print(f'advert "{a.name}" ({len(adv)} bytes, key {pub_of(key)[:8].hex()}...) in 3 s, then every {a.advert_every} min')
