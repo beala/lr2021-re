@@ -79,6 +79,7 @@ which has no location set.
 | [docs/test-bus.md](docs/test-bus.md) | Undocumented test bus on the DIO pads (0x012F): selector map, packet flags; DIO function codes |
 | [docs/ranging.md](docs/ranging.md) | RTToF ranging between the two boards with raw commands; the PRAM patch fixes the ranging RSSI |
 | [docs/pram-scanner.md](docs/pram-scanner.md) | Multi-channel LoRa receiver on the chip: CAD hopping over up to 32 channels from PRAM, ~20 channels at MeshCore's SF7 preamble; the ROM event loop a long command must run |
+| [docs/pram-pll.md](docs/pram-pll.md) | FM generated on the chip by writing the synthesizer word (0xF40144) during CW: flat to 100 kHz, on-chip AFSK APRS that decodes |
 | [docs/lora-detection.md](docs/lora-detection.md) | Undocumented LoRa sync/detection commands (raw sync word 0x022D, 0x021F, 0x0226); the sync word barely filters |
 | [docs/dualband-bench.md](docs/dualband-bench.md) | 908 MHz / 2478 MHz dual-band CAD scanning: switch time, catch rates |
 | [firmware/README.md](firmware/README.md) | The test firmware: console (`mr`, `mw`, `rc`, `stream`, `iqstream`, LoRa RX/TX), benches, boards |
@@ -130,6 +131,9 @@ Data tables:
   hop on top of the CAD), drops into RX on a real preamble and shrugs off false alarms. 89/90
   MeshCore-style packets caught and decoded on a random one of 20 channels; mixed SF7–SF10 tables
   work too ([pram-scanner.md](docs/pram-scanner.md)).
+- **The chip makes its own FM:** PRAM code writing the synthesizer word during a CW carrier moves it
+  within ~2 µs; FM response is flat to 100 kHz. An on-chip AFSK generator sends APRS frames that
+  an RTL-SDR decodes, with nothing streamed from the host ([pram-pll.md](docs/pram-pll.md)).
 - **The LoRa sync word is a weak filter:** a receiver on 0x12 accepts any first nibble except 0
   (0x22, 0x42, 0xF2 all 100 %) and some packets with a different second nibble. Undocumented
   0x022D sets the two sync symbols directly, odd values included ([lora-detection.md](docs/lora-detection.md)).
@@ -155,6 +159,7 @@ python3 -u tools/continuous_capture.py --seconds 0 --decode       # live MeshCor
 python3 tools/ranging.py --n 200 --sf 9                           # RTToF ranging between the two boards (TX at 908 MHz)
 python3 tools/lora_per.py --tx-rc 0223:42 --rx-rc 0223:12         # packet delivery with raw commands on either side (908 MHz)
 python3 tools/scan.py bench --channels 20 --trials 30             # on-chip multi-channel receiver vs the other board (902.5-910.25 MHz)
+python3 tools/pll.py aprs --sdr                                   # APRS frame generated on the chip (908 MHz), decoded by an RTL-SDR
 ```
 
 ## Layout

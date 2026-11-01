@@ -14,7 +14,7 @@ Tags: **[HW]** = measured or verified on hardware, **[RE]** = read from the ROM,
 | | |
 |---|---|
 | Core | Synopsys ARCv2 EM (IDENTITY 0x46), **reduced 16-entry register file** [HW] |
-| Clock | **32.1 MHz** (10⁶ one-cycle loop iterations in 31.3 ms) [HW] |
+| Clock | **32.1 MHz** (10⁶ one-cycle loop iterations in 31.3 ms); **32.0 MHz** in TX, from SDR-timed cycle loops ([pram-pll.md](pram-pll.md)) [HW] |
 | Code memory | ROM 80 KB at 0x000000; **PRAM 4 KB at 0x101000**, the only place our code can run [HW] |
 | Data memory | DCCM RAM from 0x800000 (data only, not executable) [HW] |
 | Multiplier | `mpy`/`mpyw`/`mpyu`..., 3 cycles, no DSP extensions [HW]/[RE] |
@@ -67,7 +67,8 @@ Measured with PRAM benchmark entry 10 (`rc 012D 0 0A <mode>`, timed by the conso
   built in RAM (the FFT builds its twiddles at 0x807800).
 - **Open:** the same FFT benchmark ran 5% faster (11.50 vs 12.11 ms for 10 FFTs) when the chip
   was left in FS than in standby RC. The CPU clock may depend on the chip's state, e.g. RC
-  oscillator vs crystal. The 32.1 MHz figure hasn't been re-measured per state. [HW]/[guess]
+  oscillator vs crystal. The 32.1 MHz figure hasn't been re-measured per state. In TX (CW), cycle-counted loops timed
+  on an SDR put it at 32.0 MHz ([pram-pll.md](pram-pll.md)). [HW]/[guess]
 
 ### Multiplier and extensions
 

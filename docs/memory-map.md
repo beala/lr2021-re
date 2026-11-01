@@ -90,7 +90,8 @@ PRAM is full: the 2240 B patch plus the 1840 B JLI table leave about 16 B free. 
 | 0xF30A30 | [28:16] | written by 0x021F; [27:24] acts in the LoRa payload demodulator ([lora-detection.md](lora-detection.md)) | [HW] |
 | 0xF30A68 | [12:8], [4:0] | LoRa sync word symbol values (0x0223, raw 0x022D) | [HW] |
 | 0xF30B00/04/08 | [19:15], [14:10] | side-detector sync words (0x0225, raw 0x022E) | [RE] |
-| 0xF40144 | [6:0] | PLL frequency fractional bits, zeroed while ranging (PRAM hooks 267/268) | [RE] |
+| 0xF40144 | | Synthesizer frequency word, Hz × 2²⁰ / 10⁶; a write retunes at once, even during TX ([pram-pll.md](pram-pll.md)). [6:0] zeroed while ranging (PRAM hooks 267/268) | [HW] |
+| 0xF40140 | bit 31, [13:10] | strobe pulsed after a running retune (not required); band bits | [RE] |
 | 0xF20024 | bit 13 | DC-DC switcher control (PRAM hooks 414/417) | [RE] |
 | 0xF2A004 | | DIO output bits (0x012B) | [RE] |
 | 0xF2A008 | | force IRQ bits (0x012B) | [RE] |
