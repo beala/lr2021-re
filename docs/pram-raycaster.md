@@ -90,6 +90,10 @@ The CPU renders a frame in about 1–2 ms at 32 MHz, then sends it.
 
 ## On the air
 
+![One real frame as the RTL-SDR received it: SYNC, MARK, then PEN / X / Y slots, and the picture its 15 points draw](figures/raycaster_encoding.png)
+
+(`tools/raycaster_figure.py`: `--capture` records a frame from the chip, `--iq` draws this.)
+
 During CW (SetTxTestMode `0x020E 02`), the blob writes the synthesizer word `0xF40144` once per
 slot, as the [waterfall text](pram-waterfall-text.md) blob does. The carrier moves within about
 2 µs and settles in 15–20 µs. A slot is 80 µs, and the receiver averages its last 40%.
