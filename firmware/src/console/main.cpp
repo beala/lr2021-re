@@ -13,6 +13,7 @@
 //   loratx <hex>                    send one LoRa packet (explicit header, CRC on, 16-symbol preamble)
 //   rxstats                         hardware RX counters
 //   spifree [np] [s] [w<ms>] <hex>  send a command frame, release NSS/SCK/MOSI until BUSY drops (PRAM drives them)
+//   rpt                             XIAO: run the MeshCore repeater (xiao_repeater: also at power-up)
 //   sysoff                          release the SPI pins and put the MCU into System OFF (reset to wake)
 //   rxread                          read the packet in the RX FIFO (after a raw RX, e.g. tools/scan.py)
 //   pinmon <ms> / pinsnap <n>       XIAO only: watch the pads wired to the MCU (docs/test-bus.md)
@@ -449,6 +450,89 @@ static void sysoff() {
 #endif
 }
 
+#if defined(BOARD_XIAO_WIO_LR2021)
+// "rpt": run the MeshCore repeater on the chip (docs/pram-repeater.md) with the settings tested with
+// a real companion, then get the MCU out of the way. The xiao_repeater build also does this at
+// power-up. The console stays reachable for 30 s; then:
+//   no USB host has enumerated the board (bench supply, charger, battery): System OFF. Replug or
+//   reset to start again.
+//   a USB host has (a PC): sleep in delay() with the console reachable; any input stops the
+//   repeater and returns to the console, and uploads work as usual.
+extern "C" bool tud_mounted(void);
+#include "mesh_blob.h"
+static const uint8_t RPT_START[] = { 0x01, 0x01,      // entry 1, op 1: start
+  0x00, 0x00, 0x00, 0x00,                            // ID 00000000: path hash 00
+  32, 32, 32,                                        // RX / TX preamble (MeshCore at SF7), SPI half-bit
+  7, 3, 1,                                           // SF7, 62.5 kHz, CR 4/5
+  5, 3, 64 };                                        // flood / direct delay factors (tenths), hop limit
+
+static bool rptStart() {
+  stopRx();
+  cfg.mhz = 908.0f; cfg.bw = 62.5f; cfg.sf = 7; cfg.cr = 5; cfg.dbm = 22; cfg.sync = 0x12;
+  if (!reinit()) { Serial.println("# rpt: radio init failed"); return false; }
+  lr2021dbg::hold = true;
+  uint8_t b = 0;
+  radio.rawCmd(0x0128, &b, 1, NULL, 0);                                      // standby RC
+  for (size_t i = 0; i < sizeof(MESH_BLOB) / 4; i++) radio.memWrite(0x801000 + 4 * i, MESH_BLOB[i]);
+  radio.rawCmd(0x012D, &b, 1, NULL, 0);                                      // ActivatePram
+  uint8_t hello = 2, id[4] = { 0 };
+  radio.rawCmd(0x012D, &hello, 1, id, 4);
+  if (memcmp(id, "MSH1", 4)) { Serial.println("# rpt: blob not active"); return false; }
+  uint8_t st[80];                    // not static: .bss growth eats the FreeRTOS heap the USB task needs
+  if (radio.rawCmd(0x012D, RPT_START, sizeof(RPT_START), st, sizeof(st)) != RADIOLIB_ERR_NONE) {
+    Serial.println("# rpt: start failed"); return false;
+  }
+  Serial.println("# rpt: MeshCore repeater 00 on 908 MHz, 62.5 kHz, SF7, CR 4/5, 22 dBm, 32-symbol preamble");
+  return true;
+}
+
+static void releaseSpi() {
+  SPI.end();
+  pinMode(P_LORA_NSS, INPUT);        // no MCU pulls: the blob pulls NSS up and SCK/MOSI down itself
+  pinMode(P_LORA_SCLK, INPUT);
+  pinMode(P_LORA_MOSI, INPUT);
+  pinMode(P_LORA_MISO, INPUT);
+}
+
+static void takeSpi() {
+  pinMode(P_LORA_NSS, OUTPUT);
+  digitalWrite(P_LORA_NSS, HIGH);
+  SPI.setPins(P_LORA_MISO, P_LORA_SCLK, P_LORA_MOSI);
+  SPI.begin();
+  uint8_t s[2];
+  radio.rawCmd(0x0100, NULL, 0, s, 2);                       // resynchronise after the pins come back
+  radio.rawCmd(0x0100, NULL, 0, s, 2);
+}
+
+// Run the repeater; with a USB host, until a key arrives. Without one, System OFF (doesn't return).
+static void rptRun() {
+  if (!rptStart()) return;
+  Serial.println("# rpt: repeating, SPI released; MCU off in 30 s unless a USB host enumerated us. Any key stops");
+  delay(100);
+  releaseSpi();
+  uint32_t t0 = millis();
+  while (millis() - t0 < 30000 && !Serial.available()) delay(100);
+  if (!Serial.available() && !tud_mounted()) systemOff(D7, 1);   // D7 = the LR2021's DIO7, left low
+  while (!Serial.available()) delay(200);                    // FreeRTOS idles the CPU meanwhile
+  while (Serial.available()) Serial.read();
+  takeSpi();
+  uint8_t st[80];                    // not static: .bss growth eats the FreeRTOS heap the USB task needs
+  uint8_t op[2] = { 0x01, 0x02 };
+  radio.rawCmd(0x012D, op, 2, st, sizeof(st));
+  uint32_t v[20];
+  memcpy(v, st, sizeof(v));
+  Serial.printf("# rpt: stopped. received %lu, floods %lu, directs %lu, duplicates %lu, TX done %lu, "
+                "SPI write failures %lu, uptime %lu s\r\n", (unsigned long)v[1], (unsigned long)v[4],
+                (unsigned long)v[5], (unsigned long)v[6], (unsigned long)v[9], (unsigned long)v[10],
+                (unsigned long)v[16]);
+  op[1] = 0x00;
+  radio.rawCmd(0x012D, op, 2, st, sizeof(st));               // stop: hand the state slot back
+  uint8_t b = 0;
+  radio.rawCmd(0x0128, &b, 1, NULL, 0);
+  dirty = true;                                              // re-init before the console receives again
+}
+#endif
+
 static int hexval(char c) {
   if (c >= '0' && c <= '9') return c - '0';
   if (c >= 'a' && c <= 'f') return c - 'a' + 10;
@@ -551,6 +635,12 @@ static bool handleRadio(const char* cmd) {
     sysoff();
     return true;
   }
+#if defined(BOARD_XIAO_WIO_LR2021)
+  if (!strcmp(cmd, "rpt")) {
+    rptRun();
+    return true;
+  }
+#endif
   if (!strncmp(cmd, "spifree ", 8)) {
     static uint8_t buf[64];
     size_t n = 0;
@@ -631,6 +721,9 @@ void setup() {
   }
   lr2021dbg::hold = true;  // receiver off until "hold off" / "set radio"
   Serial.printf("# LR2021 console on %s (receiver held)\r\n", board.getManufacturerName());
+#if defined(AUTOSTART_REPEATER)
+  rptRun();                          // any key stops it and gives the console back
+#endif
 }
 
 void loop() {

@@ -143,6 +143,31 @@ So the radio needs nothing from the MCU but power and NRESET held high. On the X
 LR2021's DIO7) is the System OFF wake pin, so a future version of the blob could wake the MCU
 itself by driving DIO7 high.
 
+## Plug-in repeater
+
+The `xiao_repeater` build is the console plus an embedded copy of `mesh.bin`
+(`firmware/src/console/mesh_blob.h`, made by `tools/blob_header.py`). At power-up it:
+1. loads the blob;
+2. starts the repeater as `00` on 908 MHz, 62.5 kHz, SF7, CR 4/5, 22 dBm, with a 32-symbol preamble;
+3. releases the SPI pins.
+
+The console stays reachable for 30 s. After that:
+- **No USB host has enumerated the board** (charger, bench supply, battery): the MCU goes into
+  System OFF and only the LR2021 runs. Power-cycle to start again.
+- **A PC has enumerated it:** the MCU sleeps with the console reachable. Any key stops the repeater
+  and prints its counters. `rpt` starts it again, and uploads work as usual.
+
+The `rpt` command is in every XIAO console build.
+
+```
+cd firmware && pio run -e xiao_repeater -t upload --upload-port /dev/ttyACM0
+```
+
+The console leaves only about 8.8 KB of FreeRTOS heap after its capture buffers. 160 more bytes of
+static buffers stopped the USB task from starting, so the board never enumerated. Keep `.heap` at or
+above 8880 bytes (`arm-none-eabi-size -A`). A board stuck that way recovers with a double-tap of
+reset and a UF2 copied to its drive.
+
 ## Entries (`mesh.bin`)
 
 | Entry | Params | What it does |
