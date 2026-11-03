@@ -36,8 +36,10 @@ DWELL_US = 80.0                 # one slot (the PLL settles in 15-20 us)
 EMIT_CYCLES = 31                # each slot also takes ~31 CPU cycles of loop and register writes [HW]
 SYNC_L, MARK_L, PEN_L = -220, 220, -130   # levels: f = L x step; X = x - 80, Y = y (half units)
 
-# The map lives in the blob (firmware/pram/ray.c, loosely after the start of E1M1); the demo's
-# route below is just a player who knows the way.
+# There is no map here. The map is in the blob (firmware/pram/ray.c, MAP), on the chip; this script
+# never reads it. START is sent to the chip once (op 0). ROUTE is only for `demo`: a list of spots
+# to walk to, which the script steers toward using the position the chip reports back after each
+# call, pressing the same keys a player would (docs/pram-raycaster.md, "Where everything lives").
 START = (2.5, 12.5, 0)          # cells, cells, angle (0-1023, 0 = east, 256 = south)
 # the demo's route: along the bottom corridor, north up the long hall, west, into the start room
 ROUTE = [(10.5, 12.5), (10.5, 3.5), (3.5, 3.5), (3.5, 6.5), (6.0, 6.5), (6.0, 9.0), (1.5, 9.0)]
@@ -108,7 +110,7 @@ def decode_frames(f, fs, step=STEP_HZ, dwell_us=DWELL_US, times=False):
             continue
         slot = (end - t0) / (slots + 2)
         # Calibrate on this frame's own SYNC and MARK: the carrier drifts and the synthesizer's step
-        # isn't exactly the nominal one, so map the measured SYNC..MARK span onto -150..+150 steps.
+        # isn't exactly the nominal one, so map the measured SYNC..MARK span onto SYNC_L..MARK_L.
         sy = np.median(lv[max(0, int(t0 - 3 * slot)):int(t0 - 0.5 * slot)])
         mk = np.median(lv[int(t0 + 0.45 * slot):int(t0 + 0.95 * slot)])
         if not mk - sy > 0.5 * (MARK_L - SYNC_L):

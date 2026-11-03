@@ -21,6 +21,60 @@ walk through the map at about 68 frames/s, all decoded live from the RTL-SDR.
 - Host test build: `ray_sim.c` runs the same C on the PC and logs every synthesizer write.
 - Receiver and scope: `tools/raycaster.py`.
 
+## Where everything lives
+
+Everything about the game is on the LR2021. The laptop sends key presses and draws the beam where
+the radio says.
+
+**On the chip**, in its PRAM (code memory), loaded once at start as `ray.bin`:
+
+| What | In the source | In `ray.bin` (PRAM address) |
+|---|---|---|
+| The game code: movement, collision, ray casting, vectorizing, sending | `firmware/pram/ray.c` | 0x198 onward (0x101198, `ray_cmd`) |
+| **The map**, 16 × 16 cells | `MAP[]` in `ray.c` | **0x8B0–0x9AF (0x1018B0)** |
+| The sine table for the trigonometry | `SIN_Q[]` in `ray_sin.h` | 0x6AC (0x1016AC) |
+| The title screen's beam points | `TITLE[]` in `ray_title.h` (made by `gen_title.py`) | 0x9B0 (0x1019B0) |
+
+You can check the map is in the binary with `xxd -s 0x8b0 -l 256 -c 16 firmware/pram/ray.bin`: it
+prints the grid, one row per line, `01` for walls. You can also read it back from the running chip
+through the console after the blob is loaded: `mr 1018B0 32` and `mr 101930 32` (32 words each).
+
+**On the chip**, in its RAM (state while running):
+
+| What | Address |
+|---|---|
+| The player: x, y, angle, the carrier frequency | 0x807900 |
+| The 160 ray results: heights and wall types | 0x807920, 0x807A60 |
+| The frame's vector display list | 0x807B00 |
+
+**Over SPI**, MCU → chip, per call:
+
+| Direction | Bytes | Content |
+|---|---|---|
+| To the chip | 11 | op, keys held, frames to run, slot length, frequency step |
+| From the chip | 10 | player x, y, angle, frames run, points in the last frame |
+
+Once at start, the host also sends the start position and angle (op 0). The picture never crosses
+SPI. It leaves the chip only as radio: the chip's synthesizer moves the carrier, an RTL-SDR in a
+cookie tin receives it, and nothing else connects the two. The position the chip reports back is
+used only by the demo's steering and the log line.
+
+**On the laptop**, in `tools/raycaster.py`:
+- **No map.** It never reads the chip's map; there is nothing to read it from.
+- `START`: the start position, sent once.
+- `ROUTE`: only for `demo`, a list of seven spots to walk to. Each call, the script turns toward the
+  next spot using the position the chip just reported, and presses forward or turn. That is a
+  scripted player pressing keys; whether the walk is possible, and what it looks like, is all the
+  chip. `play` uses your keyboard instead.
+- The receiver: FM demodulation, frame finding, calibration, slot reading.
+- The scope simulation, which draws lines between the received points. Nothing more: no walls, no
+  depth, no colours of its own.
+
+**On the laptop, for testing only:** `ray_sim.c` compiles the same `ray.c` on the PC, and
+`raycaster.py sim` runs it with a simulated radio link. That's how the decoder was developed
+offline. The video and the bench numbers in this doc are all from the chip and the RTL-SDR, not the
+simulator.
+
 ## On the chip
 
 | Part | How |
