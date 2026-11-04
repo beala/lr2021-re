@@ -26,6 +26,8 @@ walk through the map at about 68 frames/s, all decoded live from the RTL-SDR.
 Everything about the game is on the LR2021. The laptop sends key presses and draws the beam where
 the radio says.
 
+![Setup: the laptop sends keys over USB to the nRF52840 and LR2021 board, which runs the game and transmits the picture at 908 MHz to an RTL-SDR plugged into the same laptop](figures/raycaster_setup.png)
+
 **On the chip**, in its PRAM (code memory), loaded once at start as `ray.bin`:
 
 | What | In the source | In `ray.bin` (PRAM address) |

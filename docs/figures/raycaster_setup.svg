@@ -1,0 +1,112 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="860" viewBox="0 0 1600 860" font-family="DejaVu Sans, Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="ab" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#2a78d6"/>
+    </marker>
+    <marker id="ao" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#eb6834"/>
+    </marker>
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="2.5" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="shadow" x="-10%" y="-10%" width="130%" height="140%">
+      <feDropShadow dx="0" dy="4" stdDeviation="5" flood-color="#0b0b0b" flood-opacity="0.15"/>
+    </filter>
+    <pattern id="grat" width="26" height="24" patternUnits="userSpaceOnUse" x="640" y="168">
+      <path d="M26,0 L0,0 0,24" fill="none" stroke="#173a26" stroke-width="1"/>
+    </pattern>
+  </defs>
+
+  <rect width="1600" height="860" fill="#fcfcfb"/>
+  <text x="800" y="62" font-size="30" font-weight="bold" fill="#0b0b0b" text-anchor="middle">A raycaster on the LR2021, drawn by radio</text>
+  <text x="800" y="96" font-size="17" fill="#52514e" text-anchor="middle">Keys go in over USB. The picture comes back only over the air.</text>
+
+  <!-- ===== laptop ===== -->
+  <g filter="url(#shadow)">
+    <rect x="610" y="140" width="380" height="250" rx="16" fill="#2b2f2c"/>
+    <rect x="630" y="160" width="340" height="212" rx="6" fill="#0d1210"/>
+    <path d="M560,392 L1040,392 L1072,468 Q1074,478 1062,478 L538,478 Q526,478 528,468 Z" fill="#c9ccd0"/>
+  </g>
+  <rect x="630" y="160" width="340" height="212" fill="url(#grat)"/>
+  <g filter="url(#glow)" stroke="#8dffb0" stroke-width="2.4" fill="none" stroke-linejoin="round">
+    <polyline points="650,345 650,190 708,224 708,313 650,345"/>
+    <polyline points="701,241 884,248 884,282 701,286 701,241"/>
+    <polyline points="884,219 949,193 949,341 884,315 884,219"/>
+  </g>
+  <g fill="#e9ebed" stroke="#a4a8ad" stroke-width="1">
+    <rect x="610" y="402" width="30" height="16" rx="3"/><rect x="646" y="402" width="30" height="16" rx="3"/><rect x="682" y="402" width="30" height="16" rx="3"/><rect x="718" y="402" width="30" height="16" rx="3"/><rect x="754" y="402" width="30" height="16" rx="3"/><rect x="790" y="402" width="30" height="16" rx="3"/><rect x="826" y="402" width="30" height="16" rx="3"/><rect x="862" y="402" width="30" height="16" rx="3"/><rect x="898" y="402" width="30" height="16" rx="3"/><rect x="934" y="402" width="30" height="16" rx="3"/>
+    <rect x="600" y="424" width="30" height="16" rx="3"/><rect x="636" y="424" width="30" height="16" rx="3"/><rect x="672" y="424" width="30" height="16" rx="3"/><rect x="708" y="424" width="30" height="16" rx="3"/><rect x="744" y="424" width="30" height="16" rx="3"/><rect x="780" y="424" width="30" height="16" rx="3"/><rect x="816" y="424" width="30" height="16" rx="3"/><rect x="852" y="424" width="30" height="16" rx="3"/><rect x="888" y="424" width="30" height="16" rx="3"/>
+    <rect x="640" y="446" width="230" height="18" rx="3"/>
+  </g>
+  <g fill="#2a78d6">
+    <rect x="938" y="424" width="30" height="16" rx="3"/>
+    <rect x="902" y="446" width="30" height="18" rx="3"/><rect x="938" y="446" width="30" height="18" rx="3"/><rect x="974" y="446" width="30" height="18" rx="3"/>
+  </g>
+  <g fill="#fcfcfb">
+    <path d="M953,428 l5,7 h-10 z"/><path d="M913,455 l7,-5 v10 z"/><path d="M953,460 l5,-7 h-10 z"/><path d="M993,455 l-7,-5 v10 z"/>
+  </g>
+  <text x="800" y="512" font-size="17" font-weight="bold" fill="#0b0b0b" text-anchor="middle">Laptop</text>
+  <text x="800" y="536" font-size="14" fill="#52514e" text-anchor="middle">sends the keys, shows the scope</text>
+
+  <!-- ===== radio board (left) ===== -->
+  <g filter="url(#shadow)">
+    <rect x="130" y="560" width="330" height="190" rx="14" fill="#2f6b4f"/>
+  </g>
+  <g fill="#e2c86b"><circle cx="150" cy="580" r="6"/><circle cx="440" cy="580" r="6"/><circle cx="150" cy="730" r="6"/><circle cx="440" cy="730" r="6"/></g>
+  <rect x="200" y="548" width="44" height="22" rx="4" fill="#b9bdc2" stroke="#7d8287"/>
+  <rect x="175" y="610" width="80" height="80" rx="6" fill="#1f2421"/>
+  <text x="215" y="655" font-size="11" fill="#c3c2b7" text-anchor="middle">nRF52840</text>
+  <g stroke="#e2c86b" stroke-width="2" opacity="0.8"><line x1="255" y1="630" x2="290" y2="630"/><line x1="255" y1="650" x2="290" y2="650"/><line x1="255" y1="670" x2="290" y2="670"/></g>
+  <g stroke="#c3c2b7" stroke-width="3">
+    <line x1="300" y1="606" x2="300" y2="600"/><line x1="320" y1="606" x2="320" y2="600"/><line x1="340" y1="606" x2="340" y2="600"/><line x1="360" y1="606" x2="360" y2="600"/><line x1="380" y1="606" x2="380" y2="600"/>
+    <line x1="300" y1="698" x2="300" y2="704"/><line x1="320" y1="698" x2="320" y2="704"/><line x1="340" y1="698" x2="340" y2="704"/><line x1="360" y1="698" x2="360" y2="704"/><line x1="380" y1="698" x2="380" y2="704"/>
+  </g>
+  <rect x="290" y="606" width="100" height="92" rx="6" fill="#121513" stroke="#eb6834" stroke-width="2.5"/>
+  <circle cx="302" cy="618" r="3" fill="#52514e"/>
+  <text x="340" y="650" font-size="17" font-weight="bold" fill="#f0efec" text-anchor="middle">LR2021</text>
+  <text x="340" y="672" font-size="11" fill="#c3c2b7" text-anchor="middle">runs the game</text>
+  <rect x="390" y="640" width="30" height="22" rx="3" fill="#d4b14a"/>
+  <rect x="420" y="636" width="58" height="30" rx="6" fill="#7d8287"/>
+  <g stroke="#5c6166" stroke-width="2"><line x1="432" y1="636" x2="432" y2="666"/><line x1="444" y1="636" x2="444" y2="666"/><line x1="456" y1="636" x2="456" y2="666"/><line x1="468" y1="636" x2="468" y2="666"/></g>
+  <text x="430" y="626" font-size="10.5" fill="#e6efe9" text-anchor="middle">dummy load</text>
+  <text x="295" y="782" font-size="17" font-weight="bold" fill="#0b0b0b" text-anchor="middle">LR2021 radio board</text>
+  <text x="295" y="806" font-size="14" fill="#52514e" text-anchor="middle">the map, the game, the rendering</text>
+
+  <!-- ===== RTL-SDR (right) ===== -->
+  <!-- the RTL-SDR dongle -->
+  <g filter="url(#shadow)">
+    <rect x="1170" y="612" width="230" height="84" rx="22" fill="#1f2421" stroke="#eb6834" stroke-width="3"/>
+  </g>
+  <rect x="1400" y="634" width="44" height="40" rx="4" fill="#b9bdc2" stroke="#7d8287" stroke-width="1.5"/>
+  <rect x="1412" y="646" width="20" height="6" rx="1" fill="#7d8287"/><rect x="1412" y="656" width="20" height="6" rx="1" fill="#7d8287"/>
+  <rect x="1146" y="640" width="26" height="28" rx="3" fill="#d4b14a"/>
+  <text x="1285" y="650" font-size="20" font-weight="bold" fill="#f0efec" text-anchor="middle">RTL-SDR</text>
+  <text x="1285" y="674" font-size="12" fill="#c3c2b7" text-anchor="middle">USB radio receiver</text>
+  <circle cx="1196" cy="632" r="4" fill="#1baf7a"/>
+  <text x="1300" y="782" font-size="17" font-weight="bold" fill="#0b0b0b" text-anchor="middle">RTL-SDR</text>
+  <text x="1300" y="806" font-size="14" fill="#52514e" text-anchor="middle">listens at 908 MHz, plugged into the same laptop</text>
+
+  <!-- ===== the keys: laptop -> board (blue USB cable) ===== -->
+  <path d="M560,440 C440,440 222,470 222,543" fill="none" stroke="#2a78d6" stroke-width="4" marker-end="url(#ab)"/>
+  <text x="300" y="400" font-size="15" font-weight="bold" fill="#2a78d6" text-anchor="middle">USB: the keys</text>
+  <text x="300" y="421" font-size="13" fill="#52514e" text-anchor="middle">11 bytes a call; no picture</text>
+
+  <!-- ===== the picture: board -> RTL-SDR (radio) -> laptop (orange) ===== -->
+  <g fill="none" stroke="#eb6834" stroke-width="4" stroke-linecap="round">
+    <path d="M510,632 a26,26 0 0 1 0,40"/>
+    <path d="M532,616 a46,46 0 0 1 0,72"/>
+    <path d="M554,600 a66,66 0 0 1 0,104"/>
+    <path d="M1110,600 a66,66 0 0 0 0,104"/>
+    <path d="M1088,616 a46,46 0 0 0 0,72"/>
+    <path d="M1066,632 a26,26 0 0 0 0,40"/>
+  </g>
+  <line x1="620" y1="652" x2="1030" y2="652" stroke="#eb6834" stroke-width="4" stroke-dasharray="2 12" stroke-linecap="round" marker-end="url(#ao)"/>
+  <text x="825" y="625" font-size="16" font-weight="bold" fill="#eb6834" text-anchor="middle">radio, 908 MHz: the picture</text>
+  <text x="825" y="684" font-size="13" fill="#52514e" text-anchor="middle">the carrier hops once per 80 µs: X, Y, X, Y ...</text>
+  <path d="M1444,654 C1520,654 1520,440 1046,440" fill="none" stroke="#eb6834" stroke-width="4" marker-end="url(#ao)"/>
+  <text x="1300" y="400" font-size="15" font-weight="bold" fill="#eb6834" text-anchor="middle">USB: radio samples</text>
+  <text x="1300" y="421" font-size="13" fill="#52514e" text-anchor="middle">what the RTL-SDR hears</text>
+
+  <text x="800" y="845" font-size="15" fill="#52514e" text-anchor="middle">Everything on the scope is a beam move the LR2021 sent. The laptop only passes keys in and draws what the radio carries.</text>
+</svg>
