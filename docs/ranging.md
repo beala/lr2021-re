@@ -67,10 +67,67 @@ per row, none failed.
   PLL hooks (267/268/274/275) zero the low 7 bits of the PLL frequency while ranging, so they
   probably only matter when those bits are nonzero.
 
+## Extended mode: distance without the Doppler error, and relative speed [HW]
+
+Extended mode is bit 7 of SetRangingParams (0x027C), set on both radios. Each exchange is then
+two complete round trips, both started by the manager, and GetRangingResult (0x027A) type 1
+returns two results, Rng1 and Rng2 (8 bytes: Rng1 24-bit, RSSI1, Rng2 24-bit, RSSI2). The
+datasheet (§10.2.3) says to average them for a distance without the Doppler error, and that
+their difference estimates the relative speed. It gives no scale. Semtech's `usp` never uses
+extended mode.
+
+This was measured with the MeshCore `find range` code (`beala/find-me`, `LR2021Ranging.h`)
+between the NiceRF board (manager) and the XIAO, SF9 / 500 kHz at 910.525 MHz, on dummy loads.
+
+**Timeline of one extended exchange** (manager, interrupts polled after SetTx):
+
+| ms | IRQ | |
+|---|---|---|
+| 48.8 | TX_DONE | request 1 sent |
+| 64.4 | RX_DONE | response 1 received (15 symbols) |
+| 82.0 | TX_DONE | request 2 sent |
+| 97.6 | RX_DONE, EXCH_VALID | response 2 received; results ready |
+
+The synthesizer word (0xF40144) doesn't change between transmitting and receiving.
+
+**Why detuning shows nothing.** Detuning one radio by ±2 or ±4 kHz moved Rng1 by only ~6 raw
+units per kHz, and Rng1 − Rng2 not at all. A frequency offset makes a LoRa receiver misjudge
+arrival time. A fixed crystal offset is seen with the opposite sign on the two legs of a round
+trip, so it cancels. Doppler has the same sign on both legs, so it doesn't.
+
+**Emulating Doppler.** The manager shifts its own receive frequency by δ: at TX_DONE it writes
+0xF40144 = transmit word + δ, and at RX_DONE it writes the transmit word back. The subordinate
+hears requests on frequency, and the manager hears responses δ off. That's the same total as
+δ/2 of Doppler on each leg.
+
+| δ (Hz) | Rng1 | Rng2 | Rng1 − Rng2 |
+|---|---|---|---|
+| −300 … −250 | ≈ −880 | ≈ 2290 | ≈ −3170 |
+| −200 … −100 | ≈ −365 | ≈ 1775 | ≈ −2140 |
+| −75 … +30 | ≈ 145 | ≈ 1260 | ≈ −1110 |
+| +40 … +150 | ≈ 655 | ≈ 755 | ≈ −95 |
+| +175 … +250 | ≈ 1175 | ≈ 235 | ≈ +940 |
+| +300 | 1676 | −269 | 1947 |
+
+- **It's a staircase.** Each step is about 125 Hz of δ (1/8 of a LoRa bin, BW/2^SF = 977 Hz)
+  and moves Rng1 by +512 raw units and Rng2 by −512. 512 units is 1/8 of a chip. The chip
+  corrects arrival time from a frequency estimate rounded to eighths of a bin. Within a session
+  every exchange lands on the same step, so averaging doesn't refine it at this SNR (−89 dBm).
+- **The average doesn't move:** 51–52 m raw at every δ.
+- **Normal mode** shows the same staircase in Rng1 alone: 11, 48 and 85 m for δ = 0, 60 and
+  175 Hz, so relative motion can throw normal ranging off by ~37 m per step.
+- **Fixed offset.** At rest Rng2 − Rng1 = 1110 to 1135, both ways round between the two boards.
+  It didn't change when TxRxDelay changed by ±200 (both results moved together). So:
+  distance = (Rng1 + Rng2 − 1120) / 2.
+- **Speed scale.** Rng1 − Rng2 + 1120 changes by ~1030 raw units per 62.5 Hz of Doppler on each
+  leg, ~16.5 per Hz. Theory gives 4 × 2^SF / BW² per Hz = 8.2 ns = 16.8 units. Positive means
+  moving apart. At 910 MHz one step is ~20 m/s. Finer steps need a narrower bin: a higher SF
+  or a lower BW.
+
 ## Not tried
 
-- Extended mode (SetRangingParams bit 7, two exchanges whose average cancels Doppler), spy
-  mode, and the timing-synchronization DIO.
+- Spy mode, and the timing-synchronization DIO.
+- Extended mode with real motion, and its fixed offset on other boards.
 - Real distances with antennas, and calibrating TxRxDelay.
 - The fractional bandwidths (812/406/203/101 kHz), which need Semtech's
   `lr20xx_workarounds_rttof_results_deviation` register writes.
