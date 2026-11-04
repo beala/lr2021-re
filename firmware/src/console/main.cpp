@@ -15,6 +15,7 @@
 //   spifree [np] [s] [w<ms>] <hex>  send a command frame, release NSS/SCK/MOSI until BUSY drops (PRAM drives them)
 //   rpt                             XIAO: run the MeshCore repeater (xiao_repeater: also at power-up)
 //   sysoff                          release the SPI pins and put the MCU into System OFF (reset to wake)
+//   reboot                          reset the MCU; the radio chip is reset at boot (clears a hung chip)
 //   rxread                          read the packet in the RX FIFO (after a raw RX, e.g. tools/scan.py)
 //   pinmon <ms> / pinsnap <n>       XIAO only: watch the pads wired to the MCU (docs/test-bus.md)
 //   wfrun <nseg> [frames] [ov]      stream the on-chip spectrum (PRAM entry 9) as binary frames until x;
@@ -629,6 +630,12 @@ static bool handleRadio(const char* cmd) {
     stopRx();
     scanwait(strtoul(cmd + 9, NULL, 0));
     return true;
+  }
+  if (!strcmp(cmd, "reboot")) {
+    Serial.println("reboot");
+    Serial.flush();
+    delay(50);
+    NVIC_SystemReset();
   }
   if (!strcmp(cmd, "sysoff")) {
     stopRx();
