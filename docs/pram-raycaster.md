@@ -57,8 +57,8 @@ through the console after the blob is loaded: `mr 1018B0 32` and `mr 101930 32` 
 | From the chip | 10 | player x, y, angle, frames run, points in the last frame |
 
 Once at start, the host also sends the start position and angle (op 0). The picture never crosses
-SPI. It leaves the chip only as radio: the chip's synthesizer moves the carrier, an RTL-SDR in a
-cookie tin receives it, and nothing else connects the two. The position the chip reports back is
+SPI. It leaves the chip only as radio: the chip's synthesizer moves the carrier, an RTL-SDR
+receives it, and nothing else connects the two. The position the chip reports back is
 used only by the demo's steering and the log line.
 
 **On the laptop**, in `tools/raycaster.py`:
@@ -131,7 +131,7 @@ frames and a graticule.
 
 | Measurement | Result |
 |---|---|
-| Frames decoded on the bench | 656 / 656 (NiceRF at −9 dBm drive into a dummy load, RTL-SDR in a cookie tin) |
+| Frames decoded on the bench | 656 / 656 (NiceRF at −9 dBm drive into a dummy load) |
 | Title wobble, frame to frame | 0.39 screen units RMS (screen 80 wide), mean offset 0.07 |
 | Simulated RF, 30 dB SNR | points within 0.13 units on average |
 
